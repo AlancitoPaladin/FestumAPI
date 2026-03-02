@@ -1,0 +1,2 @@
+"""Festum API package."""
+
