@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 from app.schemas.user import UserResponse
@@ -9,6 +11,7 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=64)
     confirm_password: str = Field(..., min_length=8, max_length=64)
+    role: Literal["provider", "client"]
 
     @field_validator("first_name", "last_name")
     @classmethod

@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
@@ -7,6 +8,7 @@ class UserBase(BaseModel):
     first_name: str = Field(..., min_length=2, max_length=40)
     last_name: str = Field(..., min_length=2, max_length=40)
     email: EmailStr
+    role: Literal["provider", "client"] = "client"
     phone: str | None = Field(default=None, pattern=r"^\+?[1-9]\d{7,14}$")
     birth_date: date | None = None
     is_active: bool = True

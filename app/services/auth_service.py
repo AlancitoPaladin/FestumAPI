@@ -19,6 +19,7 @@ class AuthService:
             "first_name": payload.first_name,
             "last_name": payload.last_name,
             "email": str(payload.email),
+            "role": payload.role,
             "password_hash": hash_password(payload.password),
             "is_active": True,
             "phone": None,

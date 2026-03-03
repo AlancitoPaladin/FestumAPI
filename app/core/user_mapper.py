@@ -15,7 +15,7 @@ def to_public_user_document(user_data: dict[str, Any]) -> dict[str, Any]:
 
     data.pop("full_name", None)
     data["is_active"] = bool(data.get("is_active", True))
+    data.setdefault("role", "client")
     data.setdefault("phone", None)
     data.setdefault("birth_date", None)
     return data
-
