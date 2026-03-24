@@ -1,9 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from app.api.v1.router import api_router
-from app.core.config import get_settings
+from app.core.config import BASE_DIR, get_settings
 from app.core.exceptions import register_exception_handlers
 
 settings = get_settings()
@@ -24,6 +25,9 @@ app.add_middleware(
 )
 
 register_exception_handlers(app)
+uploads_dir = BASE_DIR / "uploads"
+uploads_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
 app.include_router(api_router, prefix=settings.api_v1_prefix)
 
 

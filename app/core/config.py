@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     app_version: str = "1.0.0"
     api_v1_prefix: str = "/api/v1"
     environment: Literal["local", "staging", "production"] = "local"
-    debug: bool = False
+    debug: bool = Field(default=False, alias="APP_DEBUG")
     jwt_secret_key: str = Field(default="change-this-in-production", alias="JWT_SECRET_KEY")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
     access_token_expire_minutes: int = Field(default=60, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     firebase_database_url: str | None = Field(
         default=None, alias="FIREBASE_DATABASE_URL"
     )
+    firebase_storage_bucket: str | None = Field(
+        default=None, alias="FIREBASE_STORAGE_BUCKET"
+    )
+    uploads_base_url: str | None = Field(default=None, alias="UPLOADS_BASE_URL")
 
     allowed_origins: str = Field(
         default="http://localhost,http://localhost:3000",
@@ -43,6 +47,16 @@ class Settings(BaseSettings):
     @classmethod
     def normalize_allowed_origins(cls, value: str) -> str:
         return ",".join([item.strip() for item in value.split(",") if item.strip()])
+
+    @field_validator("uploads_base_url", mode="before")
+    @classmethod
+    def normalize_uploads_base_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        if not normalized:
+            return None
+        return normalized.rstrip("/")
 
     @property
     def allowed_origins_list(self) -> list[str]:

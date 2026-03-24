@@ -26,6 +26,11 @@ class UnauthorizedError(ApiError):
     detail = "Unauthorized"
 
 
+class ForbiddenError(ApiError):
+    status_code = 403
+    detail = "Forbidden"
+
+
 class ServiceUnavailableError(ApiError):
     status_code = 503
     detail = "Service temporarily unavailable"
