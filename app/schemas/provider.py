@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.schemas.asset import SignedAssetResponse
+
 
 class ProviderBusinessProfileBase(BaseModel):
     business_name: str = Field(default="", max_length=120)
@@ -46,8 +48,11 @@ class ProviderBusinessProfileUpsert(ProviderBusinessProfileBase):
 
 
 class ProviderBusinessProfileResponse(ProviderBusinessProfileBase):
+    id: str
     provider_id: str
     is_onboarding_completed: bool = False
+    logo: SignedAssetResponse | None = None
+    photos: list[SignedAssetResponse] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -56,4 +61,5 @@ class ProviderBusinessAssetUploadResponse(BaseModel):
     provider_id: str
     asset_type: str
     storage_path: str
-    asset_url: str
+    asset: SignedAssetResponse
+    asset_url: str | None = None

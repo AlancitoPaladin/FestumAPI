@@ -29,7 +29,12 @@ class Settings(BaseSettings):
     firebase_storage_bucket: str | None = Field(
         default=None, alias="FIREBASE_STORAGE_BUCKET"
     )
-    uploads_base_url: str | None = Field(default=None, alias="UPLOADS_BASE_URL")
+    aws_region: str | None = Field(default=None, alias="AWS_REGION")
+    s3_bucket_name: str | None = Field(default=None, alias="S3_BUCKET_NAME")
+    aws_access_key_id: str | None = Field(default=None, alias="AWS_ACCESS_KEY_ID")
+    aws_secret_access_key: str | None = Field(default=None, alias="AWS_SECRET_ACCESS_KEY")
+    s3_public_base_url: str | None = Field(default=None, alias="S3_PUBLIC_BASE_URL")
+    s3_presigned_ttl_seconds: int = Field(default=1800, alias="S3_PRESIGNED_TTL_SECONDS")
 
     allowed_origins: str = Field(
         default="http://localhost,http://localhost:3000",
@@ -48,9 +53,9 @@ class Settings(BaseSettings):
     def normalize_allowed_origins(cls, value: str) -> str:
         return ",".join([item.strip() for item in value.split(",") if item.strip()])
 
-    @field_validator("uploads_base_url", mode="before")
+    @field_validator("s3_public_base_url", mode="before")
     @classmethod
-    def normalize_uploads_base_url(cls, value: str | None) -> str | None:
+    def normalize_s3_public_base_url(cls, value: str | None) -> str | None:
         if value is None:
             return None
         normalized = str(value).strip()

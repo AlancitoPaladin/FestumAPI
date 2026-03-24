@@ -90,13 +90,17 @@ class ProviderServiceCatalogService:
             service_id=service_id,
             file=file,
         )
-        self.repository.add_image(
-            provider_id=provider_id,
-            service_id=service_id,
-            image_url=image_url,
-            storage_path=storage_path,
-            is_main=is_main,
-        )
+        try:
+            self.repository.add_image(
+                provider_id=provider_id,
+                service_id=service_id,
+                image_url=image_url,
+                storage_path=storage_path,
+                is_main=is_main,
+            )
+        except Exception:
+            self.storage_service.delete_file(storage_path)
+            raise
         return ProviderServiceImageUploadResponse(
             service_id=service_id,
             storage_path=storage_path,

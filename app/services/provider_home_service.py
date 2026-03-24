@@ -13,6 +13,7 @@ from app.schemas.provider_home import (
     ProviderQuickStatsResponse,
 )
 from app.schemas.user import UserResponse
+from app.services.provider_storage_service import ProviderStorageService
 
 
 class ProviderHomeService:
@@ -21,30 +22,30 @@ class ProviderHomeService:
         self.home_repository = ProviderHomeRepository()
         self.booking_repository = ProviderBookingRepository()
         self.provider_service_repository = ProviderServiceRepository()
+        self.storage_service = ProviderStorageService()
 
     def get_dashboard(self, current_provider: UserResponse) -> ProviderHomeDashboardResponse:
         profile = self.provider_repository.get_by_provider_id(current_provider.id)
         services = self.provider_service_repository.list_by_provider(current_provider.id)
         business_name = ""
+        avatar_asset = None
         avatar_url = ""
         if profile:
             business_name = str(profile.get("business_name", "") or "")
-            avatar_url = str(profile.get("logo_url", "") or "")
+            avatar_key = self.storage_service.extract_storage_key(
+                str(
+                    profile.get("logo_storage_path")
+                    or profile.get("logo_url")
+                    or ""
+                )
+            )
+            if avatar_key:
+                avatar_asset = self.storage_service.build_signed_asset(avatar_key)
+                avatar_url = avatar_asset.url
 
         active_services = [item for item in services if item.get("status") == "active"]
         featured_services = [
-            ProviderFeaturedServiceResponse(
-                id=item["id"],
-                title=str(item.get("name", "")),
-                category=self._format_category(item.get("category")),
-                status="Activo" if item.get("status") == "active" else "Inactivo",
-                price_label=self._build_price_label(item),
-                reservations=0,
-                image_url=str(
-                    item.get("main_image_url")
-                    or (item.get("image_urls") or [""])[0]
-                ),
-            )
+            self._build_featured_service(item)
             for item in active_services[:3]
         ]
 
@@ -52,6 +53,7 @@ class ProviderHomeService:
             provider_id=current_provider.id,
             display_name=current_provider.first_name,
             business_name=business_name,
+            avatar=avatar_asset,
             avatar_url=avatar_url,
             quick_stats=ProviderQuickStatsResponse(
                 reservations_this_month=self.booking_repository.count_confirmed_for_month(
@@ -62,6 +64,28 @@ class ProviderHomeService:
                 active_services=len(active_services),
             ),
             featured_services=featured_services,
+        )
+
+    def _build_featured_service(self, item: dict) -> ProviderFeaturedServiceResponse:
+        image_source = (
+            item.get("main_image_storage_path")
+            or (item.get("image_storage_paths") or [""])[0]
+            or item.get("main_image_url")
+            or (item.get("image_urls") or [""])[0]
+            or ""
+        )
+        image_key = self.storage_service.extract_storage_key(str(image_source))
+        image_asset = self.storage_service.build_signed_asset(image_key) if image_key else None
+
+        return ProviderFeaturedServiceResponse(
+            id=item["id"],
+            title=str(item.get("name", "")),
+            category=self._format_category(item.get("category")),
+            status="Activo" if item.get("status") == "active" else "Inactivo",
+            price_label=self._build_price_label(item),
+            reservations=0,
+            image=image_asset,
+            image_url=image_asset.url if image_asset else "",
         )
 
     def list_notifications(self, provider_id: str) -> ProviderNotificationListResponse:

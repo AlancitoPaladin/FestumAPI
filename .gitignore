@@ -49,3 +49,6 @@ firebase-service-account.json
 
 # Optional frontend artifacts
 node_modules/
+
+# Local uploads
+uploads/

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import firebase_admin
-from firebase_admin import credentials, firestore, storage
+from firebase_admin import credentials, firestore
 from google.auth.exceptions import DefaultCredentialsError
 
 from app.core.config import BASE_DIR, get_settings
@@ -18,8 +18,6 @@ def _initialize_firebase() -> None:
         options["projectId"] = settings.firebase_project_id
     if settings.firebase_database_url:
         options["databaseURL"] = settings.firebase_database_url
-    if settings.firebase_storage_bucket:
-        options["storageBucket"] = settings.firebase_storage_bucket
 
     try:
         if settings.firebase_credentials_path:
@@ -50,22 +48,4 @@ def get_firestore_client() -> firestore.Client:
     except Exception as exc:
         raise ServiceUnavailableError(
             "Failed to initialize Firestore client. Verify Firebase configuration."
-        ) from exc
-
-
-def get_storage_bucket():
-    settings = get_settings()
-    if not settings.firebase_storage_bucket:
-        raise ServiceUnavailableError(
-            "Firebase Storage bucket is not configured. Verify FIREBASE_STORAGE_BUCKET."
-        )
-
-    try:
-        _initialize_firebase()
-        return storage.bucket()
-    except ServiceUnavailableError:
-        raise
-    except Exception as exc:
-        raise ServiceUnavailableError(
-            "Failed to initialize Firebase Storage bucket. Verify Firebase configuration."
         ) from exc

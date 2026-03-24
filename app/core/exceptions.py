@@ -5,10 +5,13 @@ from fastapi.responses import JSONResponse
 class ApiError(Exception):
     status_code = 400
     detail = "API error"
+    code: str | None = None
 
-    def __init__(self, detail: str | None = None) -> None:
+    def __init__(self, detail: str | None = None, code: str | None = None) -> None:
         if detail:
             self.detail = detail
+        if code:
+            self.code = code
 
 
 class ResourceNotFoundError(ApiError):
@@ -39,7 +42,14 @@ class ServiceUnavailableError(ApiError):
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApiError)
     async def api_error_handler(_: Request, exc: ApiError) -> JSONResponse:
+        payload = {
+            "success": False,
+            "message": exc.detail,
+            "detail": exc.detail,
+        }
+        if exc.code:
+            payload["code"] = exc.code
         return JSONResponse(
             status_code=exc.status_code,
-            content={"success": False, "message": exc.detail},
+            content=payload,
         )

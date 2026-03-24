@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from app.schemas.asset import SignedAssetResponse
+
 
 class ProviderQuickStatsResponse(BaseModel):
     reservations_this_month: int = 0
@@ -15,6 +17,7 @@ class ProviderFeaturedServiceResponse(BaseModel):
     status: str
     price_label: str
     reservations: int = 0
+    image: SignedAssetResponse | None = None
     image_url: str = ""
 
 
@@ -22,6 +25,7 @@ class ProviderHomeDashboardResponse(BaseModel):
     provider_id: str
     display_name: str
     business_name: str = ""
+    avatar: SignedAssetResponse | None = None
     avatar_url: str = ""
     quick_stats: ProviderQuickStatsResponse
     featured_services: list[ProviderFeaturedServiceResponse] = Field(default_factory=list)

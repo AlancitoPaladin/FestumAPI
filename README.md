@@ -49,6 +49,13 @@ cp .env.example .env
 - `FIREBASE_PROJECT_ID`
 - `FIREBASE_CREDENTIALS_PATH`
 - `FIREBASE_DATABASE_URL`
+- `FIREBASE_STORAGE_BUCKET`
+- `AWS_REGION`
+- `S3_BUCKET_NAME`
+- `AWS_ACCESS_KEY_ID` (opcional en AWS con IAM Role)
+- `AWS_SECRET_ACCESS_KEY` (opcional en AWS con IAM Role)
+- `S3_PUBLIC_BASE_URL` (opcional, por ejemplo CloudFront)
+- `S3_PRESIGNED_TTL_SECONDS` (opcional, recomendado 900-3600)
 - `ALLOWED_ORIGINS`
 
 ## Ejecutar local
@@ -127,8 +134,8 @@ Documentación:
 ## Perfil de negocio del proveedor
 - `GET /api/v1/providers/me/business-profile`: devuelve el perfil del negocio del proveedor autenticado. Si aún no existe, responde un perfil vacío. Incluye `is_onboarding_completed` para que el cliente sepa si debe volver a mostrar el onboarding.
 - `PUT /api/v1/providers/me/business-profile`: crea o actualiza el perfil del negocio del proveedor autenticado.
-- `POST /api/v1/providers/me/business-profile/logo`: sube el logo al directorio local `uploads/`. Recibe `multipart/form-data` con campo `file` en formato `image/jpeg`, `image/png` o `image/webp`. El backend convierte la imagen a `.webp`.
-- `POST /api/v1/providers/me/business-profile/photos`: sube una foto del negocio al directorio local `uploads/`. Recibe `multipart/form-data` con campo `file` en formato `image/jpeg`, `image/png` o `image/webp`. El backend convierte la imagen a `.webp`.
+- `POST /api/v1/providers/me/business-profile/logo`: sube el logo a S3. Recibe `multipart/form-data` con campo `file` en formato `image/jpeg`, `image/png` o `image/webp` y con tamaño máximo de `10 MB`. El backend convierte la imagen a `.webp`.
+- `POST /api/v1/providers/me/business-profile/photos`: sube una foto del negocio a S3. Recibe `multipart/form-data` con campo `file` en formato `image/jpeg`, `image/png` o `image/webp` y con tamaño máximo de `10 MB`. El backend convierte la imagen a `.webp`.
 
 ## Home del proveedor
 - `GET /api/v1/providers/me/home`: devuelve la información principal para la pantalla home del proveedor.
@@ -166,11 +173,11 @@ Respuesta ejemplo de `GET /api/v1/providers/me/notifications`:
 - `GET /api/v1/providers/me/services`: lista los servicios padre del proveedor autenticado.
 - `GET /api/v1/providers/me/services/{service_id}`: obtiene el detalle de un servicio padre.
 - `PATCH /api/v1/providers/me/services/{service_id}`: actualiza parcialmente un servicio padre.
-- `POST /api/v1/providers/me/services/{service_id}/images`: sube una imagen del servicio padre al directorio local `uploads/`. Recibe `multipart/form-data` con `file` y `is_main`. Acepta `jpg/png/webp` y la convierte a `.webp`.
+- `POST /api/v1/providers/me/services/{service_id}/images`: sube una imagen del servicio padre a S3. Recibe `multipart/form-data` con `file` y `is_main`. Acepta `jpg/png/webp`, límite máximo `10 MB`, y la convierte a `.webp`.
 - `PATCH /api/v1/providers/me/services/{service_id}/images/main`: cambia la foto principal del servicio padre usando `image_url`.
 - `PATCH /api/v1/providers/me/services/{service_id}/images/reorder`: reordena las imágenes existentes del servicio padre usando la lista completa de `image_urls`.
 - `DELETE /api/v1/providers/me/services/{service_id}/images`: elimina una imagen específica del servicio padre usando `image_url`.
-- `DELETE /api/v1/providers/me/services/{service_id}`: elimina el servicio padre, sus productos hijos y todas sus imágenes locales del directorio `uploads/`.
+- `DELETE /api/v1/providers/me/services/{service_id}`: elimina el servicio padre, sus productos hijos y sus imágenes en S3.
 
 Categorías soportadas:
 - `dj`
@@ -210,7 +217,7 @@ Payload ejemplo para `POST /api/v1/providers/me/services/drafts`:
 - `DELETE /api/v1/providers/me/services/{service_id}/products/{product_id}`: elimina un producto y sus imágenes.
 - `GET /api/v1/providers/me/products/reservations`: devuelve el resumen global de productos para la pantalla de reservas, incluyendo la próxima reserva por producto.
 - `DELETE /api/v1/providers/me/products/{product_id}`: elimina un producto usando solo `product_id`, útil para flujos de resumen global.
-- `POST /api/v1/providers/me/services/{service_id}/products/{product_id}/images`: sube una imagen del producto al directorio local `uploads/`. Recibe `multipart/form-data` con `file` y `is_main`. Acepta `jpg/png/webp` y la convierte a `.webp`.
+- `POST /api/v1/providers/me/services/{service_id}/products/{product_id}/images`: sube una imagen del producto a S3. Recibe `multipart/form-data` con `file` y `is_main`. Acepta `jpg/png/webp`, límite máximo `10 MB`, y la convierte a `.webp`.
 - `PATCH /api/v1/providers/me/services/{service_id}/products/{product_id}/images/main`: cambia la foto principal del producto usando `image_url`.
 - `PATCH /api/v1/providers/me/services/{service_id}/products/{product_id}/images/reorder`: reordena las imágenes del producto usando la lista completa de `image_urls`.
 - `DELETE /api/v1/providers/me/services/{service_id}/products/{product_id}/images`: elimina una imagen específica del producto usando `image_url`.
@@ -415,13 +422,15 @@ Payload ejemplo:
 ```
 
 Archivos subidos:
-- se guardan en `uploads/`
-- se sirven públicamente desde `/uploads/...`
-- si defines `UPLOADS_BASE_URL`, el backend regresará URLs absolutas; si no, regresará rutas relativas como `/uploads/providers/...`
+- se guardan en S3 usando la ruta lógica `providers/...`
+- se devuelve URL pública con este orden:
+- si defines `S3_PUBLIC_BASE_URL`, se usa esa base
+- si no, se usa `https://<bucket>.s3.<region>.amazonaws.com/<key>`
 
 Dependencias nuevas:
 - `python-multipart`
 - `Pillow`
+- `boto3`
 
 ## Validaciones implementadas
 - `first_name` y `last_name`: solo letras, normalización de espacios y capitalización
@@ -463,7 +472,7 @@ Login:
 ## Despliegue (resumen)
 - Mantener `.env` fuera del repositorio
 - En nube, ajustar valores de entorno sin modificar código
-- Cambiar `FIREBASE_DATABASE_URL` y credenciales por las del entorno destino
+- Cambiar `FIREBASE_DATABASE_URL`, `AWS_REGION`, `S3_BUCKET_NAME` y credenciales por las del entorno destino
 - Para producción se recomienda credenciales gestionadas por proveedor cloud (IAM/Secrets)
 
 ## Próximos pasos recomendados
