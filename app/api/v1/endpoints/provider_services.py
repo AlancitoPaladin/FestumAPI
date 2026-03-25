@@ -10,6 +10,8 @@ from app.schemas.provider_service import (
     ProviderServiceImageUploadResponse,
     ProviderServiceListResponse,
     ProviderServiceResponse,
+    ProviderServiceStatusUpdate,
+    ProviderServiceStatusUpdateResponse,
     ProviderServiceUpdate,
 )
 from app.schemas.user import UserResponse
@@ -61,6 +63,16 @@ def update_my_service(
     current_provider: UserResponse = Depends(get_current_provider),
 ) -> ProviderServiceResponse:
     return service.update_service(current_provider.id, service_id, payload)
+
+
+@router.patch("/me/services/{service_id}/status", response_model=ProviderServiceStatusUpdateResponse)
+def update_my_service_status(
+    service_id: str,
+    payload: ProviderServiceStatusUpdate,
+    service: ProviderServiceCatalogService = Depends(ProviderServiceCatalogService),
+    current_provider: UserResponse = Depends(get_current_provider),
+) -> ProviderServiceStatusUpdateResponse:
+    return service.update_service_status(current_provider.id, service_id, payload)
 
 
 @router.post("/me/services/{service_id}/images", response_model=ProviderServiceImageUploadResponse)

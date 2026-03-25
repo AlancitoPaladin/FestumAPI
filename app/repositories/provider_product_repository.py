@@ -10,6 +10,7 @@ class ProviderProductRepository:
     provider_profiles_collection = "provider_profiles"
     services_collection = "services"
     products_collection = "products"
+    root_services_collection = "services"
 
     def __init__(self) -> None:
         self.db = get_firestore_client()
@@ -48,6 +49,16 @@ class ProviderProductRepository:
         except (PermissionDenied, GoogleAPICallError, RetryError) as exc:
             self._raise_firestore_unavailable(exc)
 
+    def list_published_by_service(self, provider_id: str, service_id: str) -> list[dict]:
+        items = self.list_by_service(provider_id, service_id)
+        published_items: list[dict] = []
+        for item in items:
+            status = str(item.get("status") or "").strip().lower()
+            if status and status not in {"published", "active"}:
+                continue
+            published_items.append(item)
+        return published_items
+
     def get_by_id(self, provider_id: str, service_id: str, product_id: str) -> dict | None:
         try:
             document = self._products_collection(provider_id, service_id).document(product_id).get()
@@ -59,9 +70,7 @@ class ProviderProductRepository:
 
     def get_by_product_id(self, provider_id: str, product_id: str) -> dict | None:
         try:
-            service_documents = self._services_collection(provider_id).stream()
-            for service_document in service_documents:
-                service_id = service_document.id
+            for service_id in self._provider_service_ids(provider_id):
                 document = self._products_collection(provider_id, service_id).document(product_id).get()
                 if not document.exists:
                     continue
@@ -73,9 +82,7 @@ class ProviderProductRepository:
     def list_by_provider(self, provider_id: str) -> list[dict]:
         try:
             items = []
-            service_documents = self._services_collection(provider_id).stream()
-            for service_document in service_documents:
-                service_id = service_document.id
+            for service_id in self._provider_service_ids(provider_id):
                 product_documents = self._products_collection(provider_id, service_id).stream()
                 for document in product_documents:
                     items.append({"id": document.id, "service_id": service_id, **document.to_dict()})
@@ -109,8 +116,8 @@ class ProviderProductRepository:
         provider_id: str,
         service_id: str,
         product_id: str,
+        image_key: str,
         image_url: str,
-        storage_path: str,
         is_main: bool,
     ) -> dict:
         try:
@@ -124,7 +131,7 @@ class ProviderProductRepository:
             current_image_storage_paths = list(current_data.get("image_storage_paths", []))
 
             current_image_urls.append(image_url)
-            current_image_storage_paths.append(storage_path)
+            current_image_storage_paths.append(image_key)
 
             payload = {
                 "image_urls": current_image_urls,
@@ -133,7 +140,7 @@ class ProviderProductRepository:
             }
             if is_main or not current_data.get("main_image_url"):
                 payload["main_image_url"] = image_url
-                payload["main_image_storage_path"] = storage_path
+                payload["main_image_storage_path"] = image_key
 
             document_ref.update(payload)
             updated_document = document_ref.get()
@@ -144,7 +151,7 @@ class ProviderProductRepository:
             self._raise_firestore_unavailable(exc)
 
     def set_main_image(
-        self, provider_id: str, service_id: str, product_id: str, image_url: str
+        self, provider_id: str, service_id: str, product_id: str, image_key: str
     ) -> dict:
         try:
             document_ref = self._products_collection(provider_id, service_id).document(product_id)
@@ -156,12 +163,13 @@ class ProviderProductRepository:
             current_image_urls = list(current_data.get("image_urls", []))
             current_image_storage_paths = list(current_data.get("image_storage_paths", []))
 
-            if image_url not in current_image_urls:
+            normalized_image_keys = [str(item).strip().lstrip("/") for item in current_image_storage_paths]
+            if image_key not in normalized_image_keys:
                 raise ResourceNotFoundError("Product image not found")
 
-            image_index = current_image_urls.index(image_url)
+            image_index = normalized_image_keys.index(image_key)
             payload = {
-                "main_image_url": image_url,
+                "main_image_url": current_image_urls[image_index] if image_index < len(current_image_urls) else "",
                 "main_image_storage_path": current_image_storage_paths[image_index],
                 "updated_at": datetime.now(tz=timezone.utc),
             }
@@ -175,7 +183,7 @@ class ProviderProductRepository:
             self._raise_firestore_unavailable(exc)
 
     def reorder_images(
-        self, provider_id: str, service_id: str, product_id: str, image_urls: list[str]
+        self, provider_id: str, service_id: str, product_id: str, image_keys: list[str]
     ) -> dict:
         try:
             document_ref = self._products_collection(provider_id, service_id).document(product_id)
@@ -187,14 +195,16 @@ class ProviderProductRepository:
             current_image_urls = list(current_data.get("image_urls", []))
             current_image_storage_paths = list(current_data.get("image_storage_paths", []))
 
-            if sorted(image_urls) != sorted(current_image_urls):
+            normalized_image_keys = [str(item).strip().lstrip("/") for item in current_image_storage_paths]
+            if sorted(image_keys) != sorted(normalized_image_keys):
                 raise ResourceNotFoundError("Image reorder payload does not match current images")
 
-            storage_by_url = dict(zip(current_image_urls, current_image_storage_paths))
-            reordered_storage_paths = [storage_by_url[item] for item in image_urls]
+            url_by_key = dict(zip(normalized_image_keys, current_image_urls))
+            reordered_storage_paths = [key for key in image_keys]
+            reordered_image_urls = [url_by_key.get(item, "") for item in image_keys]
 
             payload = {
-                "image_urls": image_urls,
+                "image_urls": reordered_image_urls,
                 "image_storage_paths": reordered_storage_paths,
                 "updated_at": datetime.now(tz=timezone.utc),
             }
@@ -208,7 +218,7 @@ class ProviderProductRepository:
             self._raise_firestore_unavailable(exc)
 
     def delete_image(
-        self, provider_id: str, service_id: str, product_id: str, image_url: str
+        self, provider_id: str, service_id: str, product_id: str, image_key: str
     ) -> tuple[dict, str]:
         try:
             document_ref = self._products_collection(provider_id, service_id).document(product_id)
@@ -220,10 +230,11 @@ class ProviderProductRepository:
             current_image_urls = list(current_data.get("image_urls", []))
             current_image_storage_paths = list(current_data.get("image_storage_paths", []))
 
-            if image_url not in current_image_urls:
+            normalized_image_keys = [str(item).strip().lstrip("/") for item in current_image_storage_paths]
+            if image_key not in normalized_image_keys:
                 raise ResourceNotFoundError("Product image not found")
 
-            image_index = current_image_urls.index(image_url)
+            image_index = normalized_image_keys.index(image_key)
             deleted_storage_path = current_image_storage_paths.pop(image_index)
             current_image_urls.pop(image_index)
 
@@ -233,7 +244,8 @@ class ProviderProductRepository:
                 "updated_at": datetime.now(tz=timezone.utc),
             }
 
-            if current_data.get("main_image_url") == image_url:
+            current_main_key = str(current_data.get("main_image_storage_path") or "").strip().lstrip("/")
+            if current_main_key == image_key:
                 if current_image_urls:
                     payload["main_image_url"] = current_image_urls[0]
                     payload["main_image_storage_path"] = current_image_storage_paths[0]
@@ -283,6 +295,35 @@ class ProviderProductRepository:
         except (PermissionDenied, GoogleAPICallError, RetryError) as exc:
             self._raise_firestore_unavailable(exc)
 
+    def get_min_published_price_cents(self, provider_id: str, service_id: str) -> int | None:
+        try:
+            documents = list(self._products_collection(provider_id, service_id).stream())
+            prices: list[int] = []
+            for document in documents:
+                data = document.to_dict() or {}
+                status = str(data.get("status") or "").strip().lower()
+                if status and status not in {"published", "active"}:
+                    continue
+
+                raw_price = data.get("price")
+                if raw_price is None:
+                    continue
+
+                try:
+                    price_value = float(raw_price)
+                except (TypeError, ValueError):
+                    continue
+
+                if price_value <= 0:
+                    continue
+                prices.append(int(round(price_value * 100)))
+
+            if not prices:
+                return None
+            return min(prices)
+        except (PermissionDenied, GoogleAPICallError, RetryError) as exc:
+            self._raise_firestore_unavailable(exc)
+
     def _products_collection(self, provider_id: str, service_id: str):
         return (
             self.db.collection(self.provider_profiles_collection)
@@ -298,3 +339,12 @@ class ProviderProductRepository:
             .document(provider_id)
             .collection(self.services_collection)
         )
+
+    def _provider_service_ids(self, provider_id: str) -> list[str]:
+        documents = list(self.db.collection(self.root_services_collection).stream())
+        service_ids: list[str] = []
+        for document in documents:
+            data = document.to_dict() or {}
+            if data.get("provider_id") == provider_id:
+                service_ids.append(document.id)
+        return service_ids

@@ -14,6 +14,7 @@ from app.schemas.provider_home import (
 )
 from app.schemas.user import UserResponse
 from app.services.provider_storage_service import ProviderStorageService
+from app.services.service_catalog_projection_service import ServiceCatalogProjectionService
 
 
 class ProviderHomeService:
@@ -23,6 +24,7 @@ class ProviderHomeService:
         self.booking_repository = ProviderBookingRepository()
         self.provider_service_repository = ProviderServiceRepository()
         self.storage_service = ProviderStorageService()
+        self.projection_service = ServiceCatalogProjectionService()
 
     def get_dashboard(self, current_provider: UserResponse) -> ProviderHomeDashboardResponse:
         profile = self.provider_repository.get_by_provider_id(current_provider.id)
@@ -43,7 +45,7 @@ class ProviderHomeService:
                 avatar_asset = self.storage_service.build_signed_asset(avatar_key)
                 avatar_url = avatar_asset.url
 
-        active_services = [item for item in services if item.get("status") == "active"]
+        active_services = [item for item in services if item.get("status") == "published"]
         featured_services = [
             self._build_featured_service(item)
             for item in active_services[:3]
@@ -67,25 +69,17 @@ class ProviderHomeService:
         )
 
     def _build_featured_service(self, item: dict) -> ProviderFeaturedServiceResponse:
-        image_source = (
-            item.get("main_image_storage_path")
-            or (item.get("image_storage_paths") or [""])[0]
-            or item.get("main_image_url")
-            or (item.get("image_urls") or [""])[0]
-            or ""
-        )
-        image_key = self.storage_service.extract_storage_key(str(image_source))
-        image_asset = self.storage_service.build_signed_asset(image_key) if image_key else None
+        projected = self.projection_service.build_service_projection(item)
 
         return ProviderFeaturedServiceResponse(
             id=item["id"],
             title=str(item.get("name", "")),
             category=self._format_category(item.get("category")),
-            status="Activo" if item.get("status") == "active" else "Inactivo",
-            price_label=self._build_price_label(item),
+            status="Activo" if item.get("status") == "published" else "Inactivo",
+            price_label=str(projected.get("price_label", "")),
             reservations=0,
-            image=image_asset,
-            image_url=image_asset.url if image_asset else "",
+            image=projected.get("image"),
+            image_url=str(projected.get("image_url", "")),
         )
 
     def list_notifications(self, provider_id: str) -> ProviderNotificationListResponse:
@@ -116,20 +110,4 @@ class ProviderHomeService:
     def _format_category(category: str | None) -> str:
         if not category:
             return ""
-        return str(category).replace("_", " ").title()
-
-    @staticmethod
-    def _build_price_label(service: dict) -> str:
-        price = service.get("price")
-        pricing_unit = str(service.get("pricing_unit") or "").strip()
-        if price is None:
-            return "Sin precio"
-
-        if float(price).is_integer():
-            price_text = str(int(price))
-        else:
-            price_text = f"{float(price):.2f}".rstrip("0").rstrip(".")
-
-        if pricing_unit:
-            return f"${price_text} {pricing_unit}"
-        return f"${price_text}"
+        return str(category).replace("-", " ").replace("_", " ").title()

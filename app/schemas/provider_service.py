@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.schemas.asset import SignedAssetResponse
+
 
 ProviderServiceCategory = Literal[
     "dj",
@@ -13,42 +15,88 @@ ProviderServiceCategory = Literal[
     "equipment",
     "venue",
     "decoration",
+    "salones-sociales",
+    "mobiliario",
+    "banquetes",
 ]
+ProviderServiceStatus = Literal["draft", "published", "inactive"]
+ProviderServicePublishableStatus = Literal["published", "inactive"]
 
-ProviderServiceStatus = Literal["draft", "active", "inactive"]
 
-
-class ProviderServiceBase(BaseModel):
+class ProviderServiceDocument(BaseModel):
     category: ProviderServiceCategory
-    name: str = Field(..., min_length=2, max_length=120)
-    description: str = Field(default="", max_length=1500)
+    name: str = Field(default="", max_length=120)
+    subtitle: str = Field(default="", max_length=200)
+    description: str = Field(default="", max_length=4000)
+    unit_price_cents: int = Field(default=0, ge=0)
+    price_label: str = Field(default="", max_length=80)
+    badge: str = Field(default="", max_length=40)
     status: ProviderServiceStatus = "draft"
-    main_image_url: str = Field(default="", max_length=500)
-    image_urls: list[str] = Field(default_factory=list, max_length=10)
+    main_image_key: str = Field(default="", max_length=1024)
+    image_keys: list[str] = Field(default_factory=list, max_length=10)
 
-    @field_validator("name", "description", mode="before")
+    @field_validator(
+        "name",
+        "subtitle",
+        "description",
+        "price_label",
+        "badge",
+        "main_image_key",
+        mode="before",
+    )
     @classmethod
     def normalize_text(cls, value: str | None) -> str:
         if value is None:
             return ""
         return " ".join(str(value).split()).strip()
 
-    @field_validator("image_urls", mode="before")
+    @field_validator("image_keys", mode="before")
     @classmethod
-    def normalize_image_urls(cls, value: list[str] | None) -> list[str]:
+    def normalize_image_keys(cls, value: list[str] | None) -> list[str]:
         if value is None:
             return []
-        return [str(item).strip() for item in value if str(item).strip()]
+        return [str(item).strip().lstrip("/") for item in value if str(item).strip()]
 
 
-class ProviderServiceCreate(ProviderServiceBase):
-    pass
+class ProviderServiceCreate(BaseModel):
+    category: ProviderServiceCategory
+    name: str = Field(..., min_length=1, max_length=120)
+    subtitle: str = Field(..., min_length=1, max_length=200)
+    description: str = Field(default="", max_length=4000)
+    main_image_key: str = Field(default="", max_length=1024)
+    image_keys: list[str] = Field(default_factory=list, max_length=10)
+
+    @field_validator(
+        "name",
+        "subtitle",
+        "description",
+        "main_image_key",
+        mode="before",
+    )
+    @classmethod
+    def normalize_text(cls, value: str | None) -> str:
+        if value is None:
+            return ""
+        return " ".join(str(value).split()).strip()
+
+    @field_validator("image_keys", mode="before")
+    @classmethod
+    def normalize_image_keys(cls, value: list[str] | None) -> list[str]:
+        if value is None:
+            return []
+        return [str(item).strip().lstrip("/") for item in value if str(item).strip()]
+
+    @model_validator(mode="after")
+    def ensure_main_image_is_in_image_keys(self) -> "ProviderServiceCreate":
+        if self.main_image_key and self.main_image_key not in self.image_keys:
+            self.image_keys.insert(0, self.main_image_key)
+        return self
 
 
 class ProviderServiceDraftCreate(BaseModel):
     category: ProviderServiceCategory
-    name: str = Field(..., min_length=2, max_length=120)
-    description: str = Field(default="", max_length=1500)
+    name: str = Field(..., min_length=1, max_length=120)
+    description: str = Field(default="", max_length=4000)
 
     @field_validator("name", "description", mode="before")
     @classmethod
@@ -59,16 +107,33 @@ class ProviderServiceDraftCreate(BaseModel):
 
 
 class ProviderServiceUpdate(BaseModel):
-    name: str | None = Field(default=None, min_length=2, max_length=120)
-    description: str | None = Field(default=None, max_length=1500)
-    status: ProviderServiceStatus | None = None
+    category: ProviderServiceCategory | None = None
+    name: str | None = Field(default=None, max_length=120)
+    subtitle: str | None = Field(default=None, max_length=200)
+    description: str | None = Field(default=None, max_length=4000)
+    main_image_key: str | None = Field(default=None, max_length=1024)
+    image_keys: list[str] | None = None
 
-    @field_validator("name", "description", mode="before")
+    @field_validator(
+        "name",
+        "subtitle",
+        "description",
+        "main_image_key",
+        mode="before",
+    )
     @classmethod
-    def normalize_text(cls, value: str | None) -> str | None:
+    def normalize_optional_text(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        return " ".join(str(value).split()).strip()
+        normalized = " ".join(str(value).split()).strip()
+        return normalized
+
+    @field_validator("image_keys", mode="before")
+    @classmethod
+    def normalize_optional_image_keys(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        return [str(item).strip().lstrip("/") for item in value if str(item).strip()]
 
     @model_validator(mode="after")
     def validate_has_at_least_one_field(self) -> "ProviderServiceUpdate":
@@ -77,11 +142,19 @@ class ProviderServiceUpdate(BaseModel):
         return self
 
 
-class ProviderServiceResponse(ProviderServiceBase):
+class ProviderServiceStatusUpdate(BaseModel):
+    status: ProviderServicePublishableStatus
+
+
+class ProviderServiceStatusUpdateResponse(BaseModel):
+    ok: bool = True
+
+
+class ProviderServiceResponse(ProviderServiceDocument):
     id: str
     provider_id: str
-    image_storage_paths: list[str] = Field(default_factory=list)
-    main_image_storage_path: str = Field(default="", max_length=500)
+    image: SignedAssetResponse | None = None
+    image_url: str = ""
     created_at: datetime
     updated_at: datetime
 
@@ -93,29 +166,30 @@ class ProviderServiceListResponse(BaseModel):
 
 class ProviderServiceImageUploadResponse(BaseModel):
     service_id: str
-    storage_path: str
-    image_url: str
+    key: str
+    image: SignedAssetResponse
+    image_url: str = ""
     is_main: bool
 
 
 class ProviderServiceImageReferenceRequest(BaseModel):
-    image_url: str = Field(..., min_length=1, max_length=500)
+    image_key: str = Field(..., min_length=1, max_length=1024)
 
-    @field_validator("image_url", mode="before")
+    @field_validator("image_key", mode="before")
     @classmethod
-    def normalize_image_url(cls, value: str) -> str:
-        return str(value).strip()
+    def normalize_image_key(cls, value: str) -> str:
+        return str(value).strip().lstrip("/")
 
 
 class ProviderServiceImageReorderRequest(BaseModel):
-    image_urls: list[str] = Field(..., min_length=1, max_length=10)
+    image_keys: list[str] = Field(..., min_length=1, max_length=10)
 
-    @field_validator("image_urls", mode="before")
+    @field_validator("image_keys", mode="before")
     @classmethod
-    def normalize_image_urls(cls, value: list[str] | None) -> list[str]:
+    def normalize_image_keys(cls, value: list[str] | None) -> list[str]:
         if value is None:
             return []
-        return [str(item).strip() for item in value if str(item).strip()]
+        return [str(item).strip().lstrip("/") for item in value if str(item).strip()]
 
 
 class ProviderServiceDeleteResponse(BaseModel):

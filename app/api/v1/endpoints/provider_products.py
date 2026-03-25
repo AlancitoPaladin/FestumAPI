@@ -9,6 +9,8 @@ from app.schemas.provider_product import (
     ProviderProductImageUploadResponse,
     ProviderProductListResponse,
     ProviderProductResponse,
+    ProviderProductStatusUpdate,
+    ProviderProductStatusUpdateResponse,
     ProviderProductUpdate,
 )
 from app.schemas.provider_reservation import ProviderReservationProductSummaryListResponse
@@ -54,6 +56,15 @@ def list_my_products_for_reservations(
     return service.list_products_for_reservations(current_provider.id)
 
 
+@router.get("/me/products/{product_id}", response_model=ProviderProductResponse)
+def get_my_product_by_id(
+    product_id: str,
+    service: ProviderProductService = Depends(ProviderProductService),
+    current_provider: UserResponse = Depends(get_current_provider),
+) -> ProviderProductResponse:
+    return service.get_product_by_id(current_provider.id, product_id)
+
+
 @router.get("/me/services/{service_id}/products/{product_id}", response_model=ProviderProductResponse)
 def get_my_product(
     service_id: str,
@@ -75,9 +86,41 @@ def update_my_product(
     return service.update_product(current_provider.id, service_id, product_id, payload)
 
 
+@router.patch("/me/products/{product_id}", response_model=ProviderProductResponse)
+def update_my_product_by_id(
+    product_id: str,
+    payload: ProviderProductUpdate,
+    service: ProviderProductService = Depends(ProviderProductService),
+    current_provider: UserResponse = Depends(get_current_provider),
+) -> ProviderProductResponse:
+    return service.update_product_by_id(current_provider.id, product_id, payload)
+
+
+@router.patch("/me/products/{product_id}/status", response_model=ProviderProductStatusUpdateResponse)
+def update_my_product_status(
+    product_id: str,
+    payload: ProviderProductStatusUpdate,
+    service: ProviderProductService = Depends(ProviderProductService),
+    current_provider: UserResponse = Depends(get_current_provider),
+) -> ProviderProductStatusUpdateResponse:
+    return service.update_product_status(current_provider.id, product_id, payload)
+
+
+@router.post("/me/products/{product_id}/images", response_model=ProviderProductImageUploadResponse)
+def upload_my_product_image_by_id(
+    product_id: str,
+    file: UploadFile = File(...),
+    is_main: bool = Form(default=False),
+    service: ProviderProductService = Depends(ProviderProductService),
+    current_provider: UserResponse = Depends(get_current_provider),
+) -> ProviderProductImageUploadResponse:
+    return service.upload_product_image_by_id(current_provider.id, product_id, file, is_main)
+
+
 @router.post(
     "/me/services/{service_id}/products/{product_id}/images",
     response_model=ProviderProductImageUploadResponse,
+    include_in_schema=False,
 )
 def upload_my_product_image(
     service_id: str,
@@ -96,9 +139,20 @@ def upload_my_product_image(
     )
 
 
+@router.patch("/me/products/{product_id}/images/main", response_model=ProviderProductResponse)
+def set_my_product_main_image_by_id(
+    product_id: str,
+    payload: ProviderProductImageReferenceRequest,
+    service: ProviderProductService = Depends(ProviderProductService),
+    current_provider: UserResponse = Depends(get_current_provider),
+) -> ProviderProductResponse:
+    return service.set_main_product_image_by_id(current_provider.id, product_id, payload)
+
+
 @router.patch(
     "/me/services/{service_id}/products/{product_id}/images/main",
     response_model=ProviderProductResponse,
+    include_in_schema=False,
 )
 def set_my_product_main_image(
     service_id: str,
@@ -134,9 +188,20 @@ def reorder_my_product_images(
     )
 
 
+@router.delete("/me/products/{product_id}/images", response_model=ProviderProductResponse)
+def delete_my_product_image_by_id(
+    product_id: str,
+    payload: ProviderProductImageReferenceRequest,
+    service: ProviderProductService = Depends(ProviderProductService),
+    current_provider: UserResponse = Depends(get_current_provider),
+) -> ProviderProductResponse:
+    return service.delete_product_image_by_id(current_provider.id, product_id, payload)
+
+
 @router.delete(
     "/me/services/{service_id}/products/{product_id}/images",
     response_model=ProviderProductResponse,
+    include_in_schema=False,
 )
 def delete_my_product_image(
     service_id: str,

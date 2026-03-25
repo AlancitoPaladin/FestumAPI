@@ -1,8 +1,6 @@
 from datetime import datetime, timezone
 
 from google.api_core.exceptions import GoogleAPICallError, PermissionDenied, RetryError
-from google.cloud.firestore_v1.base_query import FieldFilter
-
 from app.core.exceptions import ServiceUnavailableError
 from app.core.firebase import get_firestore_client
 
@@ -109,10 +107,8 @@ class ClientRepository:
 
     def services_by_category(self, category: str) -> list[dict]:
         try:
-            query = self.db.collection("services").where(
-                filter=FieldFilter("category", "==", category)
-            )
-            return [{"id": doc.id, **doc.to_dict()} for doc in query.stream()]
+            items = self.list_published_services()
+            return [item for item in items if item.get("category") == category]
         except (PermissionDenied, GoogleAPICallError, RetryError) as exc:
             self._raise_firestore_unavailable(exc)
 
@@ -121,7 +117,52 @@ class ClientRepository:
             doc = self.db.collection("services").document(service_id).get()
             if not doc.exists:
                 return None
-            return {"id": doc.id, **doc.to_dict()}
+            data = doc.to_dict() or {}
+            return {"id": doc.id, **data}
+        except (PermissionDenied, GoogleAPICallError, RetryError) as exc:
+            self._raise_firestore_unavailable(exc)
+
+    def list_published_services(self) -> list[dict]:
+        try:
+            docs = list(self.db.collection("services").stream())
+            items: list[dict] = []
+            for doc in docs:
+                data = doc.to_dict() or {}
+                if data.get("status") != "published":
+                    continue
+                items.append({"id": doc.id, **data})
+            items.sort(key=lambda item: item.get("created_at"), reverse=True)
+            return items
+        except (PermissionDenied, GoogleAPICallError, RetryError) as exc:
+            self._raise_firestore_unavailable(exc)
+
+    def published_service_by_product_id(self, product_id: str) -> tuple[dict, dict] | None:
+        try:
+            services = self.list_published_services()
+            for service in services:
+                provider_id = str(service.get("provider_id") or "")
+                service_id = str(service.get("id") or "")
+                if not provider_id or not service_id:
+                    continue
+
+                products_collection = (
+                    self.db.collection("provider_profiles")
+                    .document(provider_id)
+                    .collection("services")
+                    .document(service_id)
+                    .collection("products")
+                )
+                product_doc = products_collection.document(product_id).get()
+                if not product_doc.exists:
+                    continue
+
+                product_data = product_doc.to_dict() or {}
+                status = str(product_data.get("status") or "").strip().lower()
+                if status and status not in {"published", "active"}:
+                    return None
+                return {"id": service_id, **service}, {"id": product_doc.id, **product_data}
+
+            return None
         except (PermissionDenied, GoogleAPICallError, RetryError) as exc:
             self._raise_firestore_unavailable(exc)
 

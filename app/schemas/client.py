@@ -6,7 +6,19 @@ from pydantic import BaseModel, Field
 from app.schemas.asset import SignedAssetResponse
 
 
-ServiceCategory = Literal["salones-sociales", "mobiliario", "banquetes"]
+ServiceCategory = Literal[
+    "dj",
+    "photography",
+    "entertainment",
+    "banquet",
+    "furniture",
+    "equipment",
+    "venue",
+    "decoration",
+    "salones-sociales",
+    "mobiliario",
+    "banquetes",
+]
 OrderStatus = Literal["pending_payment", "confirmed", "in_progress", "completed", "cancelled"]
 
 
@@ -66,10 +78,35 @@ class UpdateOrderStatusRequest(BaseModel):
     status: OrderStatus
 
 
+class ClientProductItem(BaseModel):
+    id: str
+    service_id: str
+    name: str = Field(..., min_length=1, max_length=120)
+    description: str = Field(default="", max_length=4000)
+    price_label: str = Field(..., min_length=1, max_length=80)
+    unit_price_cents: int = Field(..., ge=0)
+    category: ServiceCategory
+    image: SignedAssetResponse | None = None
+    image_url: str = ""
+
+
+class ClientAvailabilityDay(BaseModel):
+    date: str
+    status: Literal["available", "reserved", "blocked"]
+
+
+class ClientProductAvailabilityResponse(BaseModel):
+    product_id: str
+    year: int
+    month: int
+    days: list[ClientAvailabilityDay] = Field(default_factory=list)
+
+
 class ServiceItem(BaseModel):
     id: str
     name: str = Field(..., min_length=1, max_length=120)
     subtitle: str = Field(..., min_length=1, max_length=200)
+    description: str = Field(default="", max_length=4000)
     price_label: str = Field(..., min_length=1, max_length=80)
     unit_price_cents: int = Field(..., ge=0)
     badge: str = Field(..., min_length=1, max_length=40)
@@ -78,9 +115,18 @@ class ServiceItem(BaseModel):
     short_subtitle: str | None = None
     image: SignedAssetResponse | None = None
     image_url: str = ""
+    products: list[ClientProductItem] = Field(default_factory=list)
 
 
 class HomeServicesResponse(BaseModel):
+    dj: list[ServiceItem] = Field(default_factory=list)
+    photography: list[ServiceItem] = Field(default_factory=list)
+    entertainment: list[ServiceItem] = Field(default_factory=list)
+    banquet: list[ServiceItem] = Field(default_factory=list)
+    furniture: list[ServiceItem] = Field(default_factory=list)
+    equipment: list[ServiceItem] = Field(default_factory=list)
+    venue: list[ServiceItem] = Field(default_factory=list)
+    decoration: list[ServiceItem] = Field(default_factory=list)
     salones_sociales: list[ServiceItem] = Field(alias="salones-sociales", default_factory=list)
     mobiliario: list[ServiceItem] = Field(default_factory=list)
     banquetes: list[ServiceItem] = Field(default_factory=list)

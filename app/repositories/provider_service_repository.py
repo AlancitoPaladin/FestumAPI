@@ -7,7 +7,6 @@ from app.core.firebase import get_firestore_client
 
 
 class ProviderServiceRepository:
-    provider_profiles_collection = "provider_profiles"
     services_collection = "services"
 
     def __init__(self) -> None:
@@ -22,63 +21,93 @@ class ProviderServiceRepository:
     def create(self, provider_id: str, data: dict) -> dict:
         try:
             now = datetime.now(tz=timezone.utc)
+            document_ref = self._services_collection().document()
             payload = {
                 **data,
+                "id": document_ref.id,
                 "provider_id": provider_id,
                 "created_at": now,
                 "updated_at": now,
             }
-            document_ref = self._services_collection(provider_id).document()
             document_ref.set(payload)
-            return {"id": document_ref.id, **payload}
+            return payload
+        except (PermissionDenied, GoogleAPICallError, RetryError) as exc:
+            self._raise_firestore_unavailable(exc)
+
+    def list_all(self) -> list[dict]:
+        try:
+            documents = list(self._services_collection().stream())
+            items = []
+            for document in documents:
+                data = document.to_dict() or {}
+                if "id" not in data:
+                    data["id"] = document.id
+                items.append(data)
+            items.sort(key=lambda item: item.get("created_at"), reverse=True)
+            return items
         except (PermissionDenied, GoogleAPICallError, RetryError) as exc:
             self._raise_firestore_unavailable(exc)
 
     def list_by_provider(self, provider_id: str) -> list[dict]:
-        try:
-            documents = (
-                self._services_collection(provider_id)
-                .order_by("created_at", direction="DESCENDING")
-                .stream()
-            )
-            return [{"id": document.id, **document.to_dict()} for document in documents]
-        except (PermissionDenied, GoogleAPICallError, RetryError) as exc:
-            self._raise_firestore_unavailable(exc)
+        return [item for item in self.list_all() if item.get("provider_id") == provider_id]
+
+    def list_published(self) -> list[dict]:
+        return [item for item in self.list_all() if item.get("status") == "published"]
+
+    def list_published_by_category(self, category: str) -> list[dict]:
+        return [
+            item
+            for item in self.list_published()
+            if item.get("category") == category
+        ]
 
     def get_by_id(self, provider_id: str, service_id: str) -> dict | None:
+        service = self.get_by_id_any_owner(service_id)
+        if not service or service.get("provider_id") != provider_id:
+            return None
+        return service
+
+    def get_by_id_any_owner(self, service_id: str) -> dict | None:
         try:
-            document = self._services_collection(provider_id).document(service_id).get()
+            document = self._services_collection().document(service_id).get()
             if not document.exists:
                 return None
-            return {"id": document.id, **document.to_dict()}
+            data = document.to_dict() or {}
+            if "id" not in data:
+                data["id"] = document.id
+            return data
         except (PermissionDenied, GoogleAPICallError, RetryError) as exc:
             self._raise_firestore_unavailable(exc)
 
+    def get_published_by_id(self, service_id: str) -> dict | None:
+        service = self.get_by_id_any_owner(service_id)
+        if not service or service.get("status") != "published":
+            return None
+        return service
+
     def get_by_name(self, provider_id: str, service_name: str) -> dict | None:
-        try:
-            documents = list(
-                self._services_collection(provider_id)
-                .where("name", "==", service_name)
-                .stream()
+        items = [
+            item
+            for item in self.list_by_provider(provider_id)
+            if str(item.get("name", "")) == service_name
+        ]
+        if not items:
+            return None
+        if len(items) > 1:
+            raise ResourceConflictError(
+                "Multiple provider services share the same name. Use service_id for this operation."
             )
-            if not documents:
-                return None
-            if len(documents) > 1:
-                raise ResourceConflictError(
-                    "Multiple provider services share the same name. Use service_id for this operation."
-                )
-            document = documents[0]
-            return {"id": document.id, **document.to_dict()}
-        except ResourceConflictError:
-            raise
-        except (PermissionDenied, GoogleAPICallError, RetryError) as exc:
-            self._raise_firestore_unavailable(exc)
+        return items[0]
 
     def update(self, provider_id: str, service_id: str, data: dict) -> dict:
         try:
-            document_ref = self._services_collection(provider_id).document(service_id)
+            document_ref = self._services_collection().document(service_id)
             document = document_ref.get()
             if not document.exists:
+                raise ResourceNotFoundError("Provider service not found")
+
+            current = document.to_dict() or {}
+            if current.get("provider_id") != provider_id:
                 raise ResourceNotFoundError("Provider service not found")
 
             payload = {
@@ -87,7 +116,10 @@ class ProviderServiceRepository:
             }
             document_ref.update(payload)
             updated_document = document_ref.get()
-            return {"id": updated_document.id, **updated_document.to_dict()}
+            updated_data = updated_document.to_dict() or {}
+            if "id" not in updated_data:
+                updated_data["id"] = updated_document.id
+            return updated_data
         except ResourceNotFoundError:
             raise
         except (PermissionDenied, GoogleAPICallError, RetryError) as exc:
@@ -97,136 +129,138 @@ class ProviderServiceRepository:
         self,
         provider_id: str,
         service_id: str,
-        image_url: str,
-        storage_path: str,
+        image_key: str,
         is_main: bool,
     ) -> dict:
         try:
-            document_ref = self._services_collection(provider_id).document(service_id)
+            document_ref = self._services_collection().document(service_id)
             document = document_ref.get()
             if not document.exists:
                 raise ResourceNotFoundError("Provider service not found")
 
-            current_data = document.to_dict()
-            current_image_urls = list(current_data.get("image_urls", []))
-            current_image_storage_paths = list(current_data.get("image_storage_paths", []))
+            current_data = document.to_dict() or {}
+            if current_data.get("provider_id") != provider_id:
+                raise ResourceNotFoundError("Provider service not found")
 
-            current_image_urls.append(image_url)
-            current_image_storage_paths.append(storage_path)
+            image_keys = list(current_data.get("image_keys", []))
+            if image_key not in image_keys:
+                image_keys.append(image_key)
 
             payload = {
-                "image_urls": current_image_urls,
-                "image_storage_paths": current_image_storage_paths,
+                "image_keys": image_keys,
                 "updated_at": datetime.now(tz=timezone.utc),
             }
-
-            if is_main or not current_data.get("main_image_url"):
-                payload["main_image_url"] = image_url
-                payload["main_image_storage_path"] = storage_path
+            if is_main or not current_data.get("main_image_key"):
+                payload["main_image_key"] = image_key
 
             document_ref.update(payload)
             updated_document = document_ref.get()
-            return {"id": updated_document.id, **updated_document.to_dict()}
+            updated_data = updated_document.to_dict() or {}
+            if "id" not in updated_data:
+                updated_data["id"] = updated_document.id
+            return updated_data
         except ResourceNotFoundError:
             raise
         except (PermissionDenied, GoogleAPICallError, RetryError) as exc:
             self._raise_firestore_unavailable(exc)
 
-    def set_main_image(self, provider_id: str, service_id: str, image_url: str) -> dict:
+    def set_main_image(self, provider_id: str, service_id: str, image_key: str) -> dict:
         try:
-            document_ref = self._services_collection(provider_id).document(service_id)
+            document_ref = self._services_collection().document(service_id)
             document = document_ref.get()
             if not document.exists:
                 raise ResourceNotFoundError("Provider service not found")
 
-            current_data = document.to_dict()
-            current_image_urls = list(current_data.get("image_urls", []))
-            current_image_storage_paths = list(current_data.get("image_storage_paths", []))
+            current_data = document.to_dict() or {}
+            if current_data.get("provider_id") != provider_id:
+                raise ResourceNotFoundError("Provider service not found")
 
-            if image_url not in current_image_urls:
+            image_keys = list(current_data.get("image_keys", []))
+            if image_key not in image_keys:
                 raise ResourceNotFoundError("Service image not found")
 
-            image_index = current_image_urls.index(image_url)
             payload = {
-                "main_image_url": image_url,
-                "main_image_storage_path": current_image_storage_paths[image_index],
+                "main_image_key": image_key,
                 "updated_at": datetime.now(tz=timezone.utc),
             }
             document_ref.update(payload)
 
             updated_document = document_ref.get()
-            return {"id": updated_document.id, **updated_document.to_dict()}
+            updated_data = updated_document.to_dict() or {}
+            if "id" not in updated_data:
+                updated_data["id"] = updated_document.id
+            return updated_data
         except ResourceNotFoundError:
             raise
         except (PermissionDenied, GoogleAPICallError, RetryError) as exc:
             self._raise_firestore_unavailable(exc)
 
-    def reorder_images(self, provider_id: str, service_id: str, image_urls: list[str]) -> dict:
+    def reorder_images(self, provider_id: str, service_id: str, image_keys: list[str]) -> dict:
         try:
-            document_ref = self._services_collection(provider_id).document(service_id)
+            document_ref = self._services_collection().document(service_id)
             document = document_ref.get()
             if not document.exists:
                 raise ResourceNotFoundError("Provider service not found")
 
-            current_data = document.to_dict()
-            current_image_urls = list(current_data.get("image_urls", []))
-            current_image_storage_paths = list(current_data.get("image_storage_paths", []))
+            current_data = document.to_dict() or {}
+            if current_data.get("provider_id") != provider_id:
+                raise ResourceNotFoundError("Provider service not found")
 
-            if sorted(image_urls) != sorted(current_image_urls):
+            current_image_keys = list(current_data.get("image_keys", []))
+            if sorted(image_keys) != sorted(current_image_keys):
                 raise ResourceNotFoundError("Image reorder payload does not match current images")
 
-            storage_by_url = dict(zip(current_image_urls, current_image_storage_paths))
-            reordered_storage_paths = [storage_by_url[item] for item in image_urls]
-
             payload = {
-                "image_urls": image_urls,
-                "image_storage_paths": reordered_storage_paths,
+                "image_keys": image_keys,
                 "updated_at": datetime.now(tz=timezone.utc),
             }
+
+            current_main_key = str(current_data.get("main_image_key") or "")
+            if current_main_key and current_main_key not in image_keys:
+                payload["main_image_key"] = image_keys[0] if image_keys else ""
+
             document_ref.update(payload)
 
             updated_document = document_ref.get()
-            return {"id": updated_document.id, **updated_document.to_dict()}
+            updated_data = updated_document.to_dict() or {}
+            if "id" not in updated_data:
+                updated_data["id"] = updated_document.id
+            return updated_data
         except ResourceNotFoundError:
             raise
         except (PermissionDenied, GoogleAPICallError, RetryError) as exc:
             self._raise_firestore_unavailable(exc)
 
-    def delete_image(self, provider_id: str, service_id: str, image_url: str) -> tuple[dict, str]:
+    def delete_image(self, provider_id: str, service_id: str, image_key: str) -> tuple[dict, str]:
         try:
-            document_ref = self._services_collection(provider_id).document(service_id)
+            document_ref = self._services_collection().document(service_id)
             document = document_ref.get()
             if not document.exists:
                 raise ResourceNotFoundError("Provider service not found")
 
-            current_data = document.to_dict()
-            current_image_urls = list(current_data.get("image_urls", []))
-            current_image_storage_paths = list(current_data.get("image_storage_paths", []))
+            current_data = document.to_dict() or {}
+            if current_data.get("provider_id") != provider_id:
+                raise ResourceNotFoundError("Provider service not found")
 
-            if image_url not in current_image_urls:
+            current_image_keys = list(current_data.get("image_keys", []))
+            if image_key not in current_image_keys:
                 raise ResourceNotFoundError("Service image not found")
 
-            image_index = current_image_urls.index(image_url)
-            deleted_storage_path = current_image_storage_paths.pop(image_index)
-            current_image_urls.pop(image_index)
-
+            current_image_keys.remove(image_key)
             payload = {
-                "image_urls": current_image_urls,
-                "image_storage_paths": current_image_storage_paths,
+                "image_keys": current_image_keys,
                 "updated_at": datetime.now(tz=timezone.utc),
             }
 
-            if current_data.get("main_image_url") == image_url:
-                if current_image_urls:
-                    payload["main_image_url"] = current_image_urls[0]
-                    payload["main_image_storage_path"] = current_image_storage_paths[0]
-                else:
-                    payload["main_image_url"] = ""
-                    payload["main_image_storage_path"] = ""
+            if current_data.get("main_image_key") == image_key:
+                payload["main_image_key"] = current_image_keys[0] if current_image_keys else ""
 
             document_ref.update(payload)
             updated_document = document_ref.get()
-            return {"id": updated_document.id, **updated_document.to_dict()}, deleted_storage_path
+            updated_data = updated_document.to_dict() or {}
+            if "id" not in updated_data:
+                updated_data["id"] = updated_document.id
+            return updated_data, image_key
         except ResourceNotFoundError:
             raise
         except (PermissionDenied, GoogleAPICallError, RetryError) as exc:
@@ -234,13 +268,20 @@ class ProviderServiceRepository:
 
     def delete(self, provider_id: str, service_id: str) -> tuple[bool, list[str]]:
         try:
-            document_ref = self._services_collection(provider_id).document(service_id)
+            document_ref = self._services_collection().document(service_id)
             document = document_ref.get()
             if not document.exists:
                 raise ResourceNotFoundError("Provider service not found")
 
-            data = document.to_dict()
-            storage_paths = list(data.get("image_storage_paths", []))
+            data = document.to_dict() or {}
+            if data.get("provider_id") != provider_id:
+                raise ResourceNotFoundError("Provider service not found")
+
+            storage_paths = list(dict.fromkeys([
+                str(data.get("main_image_key") or ""),
+                *list(data.get("image_keys", [])),
+            ]))
+            storage_paths = [item for item in storage_paths if item]
             document_ref.delete()
             return True, storage_paths
         except ResourceNotFoundError:
@@ -248,9 +289,5 @@ class ProviderServiceRepository:
         except (PermissionDenied, GoogleAPICallError, RetryError) as exc:
             self._raise_firestore_unavailable(exc)
 
-    def _services_collection(self, provider_id: str):
-        return (
-            self.db.collection(self.provider_profiles_collection)
-            .document(provider_id)
-            .collection(self.services_collection)
-        )
+    def _services_collection(self):
+        return self.db.collection(self.services_collection)

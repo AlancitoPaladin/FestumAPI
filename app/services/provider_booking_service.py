@@ -215,13 +215,20 @@ class ProviderBookingService:
     @staticmethod
     def _build_availability_summary(booking_id: str, booking: dict) -> dict:
         summary = ProviderAvailabilityBookingSummary(
+            id=booking_id,
             booking_id=booking_id,
             customer_name=str(booking.get("customer_name", "")),
             customer_image_url=str(booking.get("customer_image_url", "")),
+            date=ProviderBookingService._date_key(booking.get("event_date")),
+            time=ProviderBookingService._time_label(booking),
             event_type=str(booking.get("event_type", "")),
             guests=int(booking.get("guests", 0) or 0),
+            total_amount=float(booking.get("total_amount", 0) or 0),
+            paid_amount=float(booking.get("paid_amount", 0) or 0),
+            status=ProviderBookingService._status_label(str(booking.get("status", "pending"))),
+            notes=str(booking.get("notes", "")),
         )
-        return summary.model_dump()
+        return summary.model_dump(mode="json")
 
     @staticmethod
     def _serialize_booking_fields(payload: ProviderBookingBase) -> dict:
