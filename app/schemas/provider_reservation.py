@@ -1,5 +1,3 @@
-from datetime import date
-
 from pydantic import BaseModel, Field
 
 from app.schemas.asset import SignedAssetResponse
@@ -16,8 +14,13 @@ class ProviderReservationNextBookingResponse(BaseModel):
     customer_image_url: str = ""
     avatar_url: str = ""
     customer_image: SignedAssetResponse | None = None
-    date: date
+    event_date: str = ""
+    date: str = ""
+    start_date: str = ""
+    scheduled_date: str = ""
+    time_label: str = ""
     status: str = ""
+    status_label: str = ""
 
 
 class ProviderReservationProductSummaryResponse(BaseModel):

@@ -460,14 +460,32 @@ class ProviderProductService:
             "cancelled": "Cancelada",
             "rejected": "Rechazada",
         }
+        raw_status = str(booking.get("status", ""))
+        event_date = str(booking.get("event_date", "") or "")
+        has_specific_schedule = bool(booking.get("has_specific_schedule", False))
+        start_time = str(booking.get("start_time", "") or "")
+        end_time = str(booking.get("end_time", "") or "")
+        if has_specific_schedule and start_time and end_time:
+            time_label = f"{start_time[:5]} - {end_time[:5]}"
+        elif has_specific_schedule and start_time:
+            time_label = start_time[:5]
+        elif has_specific_schedule:
+            time_label = "Horario por confirmar"
+        else:
+            time_label = "Todo el dia"
         return ProviderReservationNextBookingResponse(
             booking_id=booking["id"],
             customer_name=str(booking.get("customer_name", "")),
             customer_image_url=customer_image_url,
             avatar_url=customer_image_url,
             customer_image=customer_asset,
-            date=str(booking.get("event_date", "")),
-            status=status_map.get(str(booking.get("status", "")), str(booking.get("status", "")).title()),
+            event_date=event_date,
+            date=event_date,
+            start_date=event_date,
+            scheduled_date=event_date,
+            time_label=time_label,
+            status=raw_status,
+            status_label=status_map.get(raw_status, raw_status.title()),
         )
 
     @staticmethod
