@@ -23,12 +23,13 @@ class ServiceCatalogProjectionService:
 
     def build_service_projection(self, service: dict) -> dict:
         unit_price_cents = self._resolve_unit_price_cents(service)
+        price_label = self._resolve_price_label(service, unit_price_cents)
         images = self._resolve_signed_images(service)
         image = next((item for item in images if item["is_main"]), images[0] if images else None)
         return {
             **service,
             "unit_price_cents": unit_price_cents,
-            "price_label": self._build_price_label(unit_price_cents),
+            "price_label": price_label,
             "badge": self._build_badge(service),
             "image": image,
             "main_image": image,
@@ -39,6 +40,14 @@ class ServiceCatalogProjectionService:
         }
 
     def _resolve_unit_price_cents(self, service: dict) -> int:
+        persisted_price = service.get("unit_price_cents")
+        if isinstance(persisted_price, int) and persisted_price >= 0:
+            return persisted_price
+        if isinstance(persisted_price, str):
+            stripped = persisted_price.strip()
+            if stripped.isdigit():
+                return int(stripped)
+
         provider_id = str(service.get("provider_id") or "")
         service_id = str(service.get("id") or "")
         if not provider_id or not service_id:
@@ -48,6 +57,12 @@ class ServiceCatalogProjectionService:
         if derived_price is None:
             return 0
         return derived_price
+
+    def _resolve_price_label(self, service: dict, unit_price_cents: int) -> str:
+        persisted_label = str(service.get("price_label") or "").strip()
+        if persisted_label:
+            return persisted_label
+        return self._build_price_label(unit_price_cents)
 
     def _resolve_signed_images(self, service: dict) -> list[dict]:
         raw_keys = list(service.get("image_keys") or [])

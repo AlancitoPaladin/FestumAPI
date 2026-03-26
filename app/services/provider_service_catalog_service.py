@@ -43,8 +43,8 @@ class ProviderServiceCatalogService:
                 "description": payload.description,
                 "main_image_key": payload.main_image_key,
                 "image_keys": payload.image_keys,
-                "unit_price_cents": 0,
-                "price_label": "Cotiza",
+                "unit_price_cents": payload.unit_price_cents or 0,
+                "price_label": self._build_price_label(payload.unit_price_cents or 0),
                 "badge": "",
                 "status": "draft",
             },
@@ -61,8 +61,8 @@ class ProviderServiceCatalogService:
                 "name": payload.name,
                 "subtitle": "",
                 "description": payload.description,
-                "unit_price_cents": 0,
-                "price_label": "Cotiza",
+                "unit_price_cents": payload.unit_price_cents or 0,
+                "price_label": self._build_price_label(payload.unit_price_cents or 0),
                 "badge": "",
                 "status": "draft",
                 "main_image_key": "",
@@ -90,6 +90,10 @@ class ProviderServiceCatalogService:
 
         update_data = payload.model_dump(exclude_none=True)
         normalized = self._normalize_image_fields(current_service, update_data)
+        if "unit_price_cents" in normalized:
+            normalized["price_label"] = self._build_price_label(
+                int(normalized["unit_price_cents"] or 0)
+            )
         service = self.repository.update(
             provider_id=provider_id,
             service_id=service_id,
@@ -252,3 +256,12 @@ class ProviderServiceCatalogService:
                 "Service must be completed before publishing. Missing: "
                 + ", ".join(missing)
             )
+
+    @staticmethod
+    def _build_price_label(unit_price_cents: int) -> str:
+        if unit_price_cents <= 0:
+            return "Cotiza"
+        amount = unit_price_cents / 100
+        if unit_price_cents % 100 == 0:
+            return f"Desde ${amount:,.0f} MXN"
+        return f"Desde ${amount:,.2f} MXN"

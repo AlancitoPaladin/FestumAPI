@@ -1,29 +1,26 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, RootModel
 
 from app.schemas.asset import SignedAssetResponse
 
 
-ServiceCategory = Literal[
-    "dj",
-    "photography",
-    "entertainment",
-    "banquet",
-    "furniture",
-    "equipment",
-    "venue",
-    "decoration",
-    "salones-sociales",
-    "mobiliario",
-    "banquetes",
+ServiceCategory = str
+OrderStatus = Literal[
+    "pending_payment",
+    "pending_provider_approval",
+    "confirmed",
+    "in_progress",
+    "completed",
+    "cancelled",
+    "rejected",
 ]
-OrderStatus = Literal["pending_payment", "confirmed", "in_progress", "completed", "cancelled"]
 
 
 class OkResponse(BaseModel):
     ok: bool = True
+    idempotent: bool = False
 
 
 class CartItem(BaseModel):
@@ -31,12 +28,19 @@ class CartItem(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
     quantity: int = Field(default=1, ge=1)
     unit_price_cents: int = Field(..., ge=0)
+    service_name: str = Field(..., min_length=1, max_length=120)
+    product_id: str | None = None
+    product_name: str | None = None
+    selected_product_ids: list[str] = Field(default_factory=list)
 
 
 class AddCartItemRequest(BaseModel):
     service_id: str = Field(..., min_length=1, max_length=120)
     name: str = Field(..., min_length=1, max_length=120)
     unit_price_cents: int = Field(..., ge=0)
+    product_id: str | None = None
+    product_name: str | None = None
+    selected_product_ids: list[str] = Field(default_factory=list)
 
 
 class RestoreCartItemRequest(BaseModel):
@@ -60,7 +64,15 @@ class OrderItem(BaseModel):
     id: str
     title: str = Field(..., min_length=3, max_length=180)
     status: OrderStatus
+    subtotal_cents: int | None = Field(default=None, ge=0)
+    service_fee_cents: int | None = Field(default=None, ge=0)
+    tax_cents: int | None = Field(default=None, ge=0)
+    total_cents: int | None = Field(default=None, ge=0)
+    currency: str | None = None
+    fee_rate: float | None = None
+    tax_rate: float | None = None
     total_label: str = Field(..., min_length=1, max_length=80)
+    items: list[dict] = Field(default_factory=list)
     created_at: datetime | None = None
 
 
@@ -78,6 +90,77 @@ class UpdateOrderStatusRequest(BaseModel):
     status: OrderStatus
 
 
+class CheckoutOrderResponse(BaseModel):
+    id: str
+    title: str
+    status: OrderStatus
+    subtotal_cents: int = Field(default=0, ge=0)
+    service_fee_cents: int = Field(default=0, ge=0)
+    tax_cents: int = Field(default=0, ge=0)
+    total_cents: int = Field(default=0, ge=0)
+    currency: str = "MXN"
+    fee_rate: float = 0
+    tax_rate: float = 0
+    total_label: str
+    created_at: datetime
+
+
+class SelectedProductSnapshot(BaseModel):
+    id: str
+    name: str
+    unit_price_cents: int = Field(..., ge=0)
+
+
+class CheckoutItemResponse(BaseModel):
+    service_id: str
+    service_name: str
+    product_id: str | None = None
+    product_name: str | None = None
+    selected_product_ids: list[str] = Field(default_factory=list)
+    selected_products_snapshot: list[SelectedProductSnapshot] = Field(default_factory=list)
+    unit_price_cents: int = Field(..., ge=0)
+    total_item_cents: int = Field(..., ge=0)
+
+
+class CheckoutProviderEffectsResponse(BaseModel):
+    reservations_created: int = 0
+    notifications_created: int = 0
+
+
+class CheckoutResponse(BaseModel):
+    order: CheckoutOrderResponse
+    items: list[CheckoutItemResponse]
+    provider_effects: CheckoutProviderEffectsResponse
+
+
+class CheckoutRequestItemPayload(BaseModel):
+    service_id: str = Field(..., min_length=1, max_length=120)
+    product_id: str | None = None
+    selected_product_ids: list[str] | None = None
+
+
+class CheckoutRequestPayload(BaseModel):
+    items: list[CheckoutRequestItemPayload] = Field(default_factory=list)
+
+
+class OrderRequestItemPayload(BaseModel):
+    service_id: str = Field(..., min_length=1, max_length=120)
+    product_id: str | None = None
+    selected_product_ids: list[str] | None = None
+    product_name: str | None = None
+    service_name: str | None = None
+
+
+class CreateOrderRequestPayload(BaseModel):
+    event_date: date
+    notes: str = Field(default="", max_length=1500)
+    items: list[OrderRequestItemPayload] = Field(default_factory=list, min_length=1)
+
+
+class OrderRequestCreateResponse(BaseModel):
+    order: CheckoutOrderResponse
+
+
 class ClientProductItem(BaseModel):
     id: str
     service_id: str
@@ -85,7 +168,7 @@ class ClientProductItem(BaseModel):
     description: str = Field(default="", max_length=4000)
     price_label: str = Field(..., min_length=1, max_length=80)
     unit_price_cents: int = Field(..., ge=0)
-    category: ServiceCategory
+    category: str
     image: SignedAssetResponse | None = None
     image_url: str = ""
 
@@ -110,7 +193,7 @@ class ServiceItem(BaseModel):
     price_label: str = Field(..., min_length=1, max_length=80)
     unit_price_cents: int = Field(..., ge=0)
     badge: str = Field(..., min_length=1, max_length=40)
-    category: ServiceCategory
+    category: str
     short_title: str | None = None
     short_subtitle: str | None = None
     image: SignedAssetResponse | None = None
@@ -118,19 +201,13 @@ class ServiceItem(BaseModel):
     products: list[ClientProductItem] = Field(default_factory=list)
 
 
-class HomeServicesResponse(BaseModel):
-    dj: list[ServiceItem] = Field(default_factory=list)
-    photography: list[ServiceItem] = Field(default_factory=list)
-    entertainment: list[ServiceItem] = Field(default_factory=list)
-    banquet: list[ServiceItem] = Field(default_factory=list)
-    furniture: list[ServiceItem] = Field(default_factory=list)
-    equipment: list[ServiceItem] = Field(default_factory=list)
-    venue: list[ServiceItem] = Field(default_factory=list)
-    decoration: list[ServiceItem] = Field(default_factory=list)
-    salones_sociales: list[ServiceItem] = Field(alias="salones-sociales", default_factory=list)
-    mobiliario: list[ServiceItem] = Field(default_factory=list)
-    banquetes: list[ServiceItem] = Field(default_factory=list)
+class HomeServicesResponse(RootModel[dict[str, list[ServiceItem]]]):
+    pass
 
-    model_config = {
-        "populate_by_name": True,
-    }
+
+class ServiceListResponse(BaseModel):
+    items: list[ServiceItem]
+    total: int
+    page: int = Field(..., ge=1)
+    page_size: int = Field(..., ge=1, le=100)
+    has_next: bool

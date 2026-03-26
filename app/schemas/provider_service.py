@@ -63,6 +63,7 @@ class ProviderServiceCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
     subtitle: str = Field(..., min_length=1, max_length=200)
     description: str = Field(default="", max_length=4000)
+    unit_price_cents: int | None = Field(default=None, ge=0)
     main_image_key: str = Field(default="", max_length=1024)
     image_keys: list[str] = Field(default_factory=list, max_length=10)
 
@@ -97,6 +98,7 @@ class ProviderServiceDraftCreate(BaseModel):
     category: ProviderServiceCategory
     name: str = Field(..., min_length=1, max_length=120)
     description: str = Field(default="", max_length=4000)
+    unit_price_cents: int | None = Field(default=None, ge=0)
 
     @field_validator("name", "description", mode="before")
     @classmethod
@@ -111,6 +113,7 @@ class ProviderServiceUpdate(BaseModel):
     name: str | None = Field(default=None, max_length=120)
     subtitle: str | None = Field(default=None, max_length=200)
     description: str | None = Field(default=None, max_length=4000)
+    unit_price_cents: int | None = Field(default=None, ge=0)
     main_image_key: str | None = Field(default=None, max_length=1024)
     image_keys: list[str] | None = None
 

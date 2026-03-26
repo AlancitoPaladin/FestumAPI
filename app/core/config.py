@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     aws_secret_access_key: str | None = Field(default=None, alias="AWS_SECRET_ACCESS_KEY")
     s3_public_base_url: str | None = Field(default=None, alias="S3_PUBLIC_BASE_URL")
     s3_presigned_ttl_seconds: int = Field(default=1800, alias="S3_PRESIGNED_TTL_SECONDS")
+    order_currency: str = Field(default="MXN", alias="ORDER_CURRENCY")
+    order_fee_rate: float = Field(default=0.05, alias="ORDER_FEE_RATE")
+    order_tax_rate: float = Field(default=0.16, alias="ORDER_TAX_RATE")
 
     allowed_origins: str = Field(
         default="http://localhost,http://localhost:3000",

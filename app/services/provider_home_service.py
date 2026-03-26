@@ -231,6 +231,8 @@ class ProviderHomeService:
             "booking_id": str(booking.get("id", "") or ""),
             "service_id": str(booking.get("service_id", "") or ""),
             "product_id": str(booking.get("product_id", "") or ""),
+            "selected_product_ids": list(booking.get("selected_product_ids") or []),
+            "selected_products_snapshot": list(booking.get("selected_products_snapshot") or []),
             "event_date": self._date_key(booking.get("event_date")),
         }
 

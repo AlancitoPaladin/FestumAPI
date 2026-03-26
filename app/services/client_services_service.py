@@ -1,26 +1,17 @@
 from app.core.exceptions import ResourceNotFoundError
 from app.repositories.client_repository import ClientRepository
 from app.repositories.provider_product_repository import ProviderProductRepository
-from app.schemas.client import HomeServicesResponse, ServiceCategory, ServiceItem
+from app.schemas.client import (
+    HomeServicesResponse,
+    ServiceCategory,
+    ServiceItem,
+    ServiceListResponse,
+)
 from app.services.product_catalog_projection_service import ProductCatalogProjectionService
 from app.services.service_catalog_projection_service import ServiceCatalogProjectionService
 
 
 class ClientServicesService:
-    home_categories = (
-        "dj",
-        "photography",
-        "entertainment",
-        "banquet",
-        "furniture",
-        "equipment",
-        "venue",
-        "decoration",
-        "salones-sociales",
-        "mobiliario",
-        "banquetes",
-    )
-
     def __init__(self) -> None:
         self.repository = ClientRepository()
         self.product_repository = ProviderProductRepository()
@@ -28,27 +19,59 @@ class ClientServicesService:
         self.product_projection_service = ProductCatalogProjectionService()
 
     def home(self) -> HomeServicesResponse:
-        payload = {
-            category: [
-                self._build_service_item(item)
-                for item in self.repository.services_by_category(category)
-            ]
-            for category in self.home_categories
-        }
-        return HomeServicesResponse(**payload)
+        services = self.repository.list_published_services()
+        grouped: dict[str, list[ServiceItem]] = {}
+        for item in services:
+            category = str(item.get("category") or "uncategorized")
+            grouped.setdefault(category, []).append(self._build_service_item(item, include_products=True))
+        return HomeServicesResponse(grouped)
 
-    def by_category(self, category: ServiceCategory) -> list[ServiceItem]:
+    def by_category(
+        self,
+        category: ServiceCategory,
+        q: str | None,
+        min_price_cents: int | None,
+        max_price_cents: int | None,
+        sort: str,
+        page: int,
+        page_size: int,
+    ) -> ServiceListResponse:
         items = self.repository.services_by_category(category)
-        return [self._build_service_item(item) for item in items]
+        projected = [self._build_service_item(item, include_products=True) for item in items]
+
+        if q:
+            lookup = q.strip().lower()
+            projected = [
+                item
+                for item in projected
+                if lookup in item.name.lower()
+                or lookup in item.subtitle.lower()
+                or lookup in item.description.lower()
+            ]
+
+        if min_price_cents is not None:
+            projected = [item for item in projected if item.unit_price_cents >= min_price_cents]
+        if max_price_cents is not None:
+            projected = [item for item in projected if item.unit_price_cents <= max_price_cents]
+
+        projected = self._sort_items(projected, sort)
+
+        total = len(projected)
+        start = (page - 1) * page_size
+        end = start + page_size
+        paged = projected[start:end]
+        return ServiceListResponse(
+            items=paged,
+            total=total,
+            page=page,
+            page_size=page_size,
+            has_next=end < total,
+        )
 
     def detail(self, service_id: str, category: ServiceCategory) -> ServiceItem:
-        item = self.repository.service_by_id(service_id)
-        if (
-            not item
-            or item.get("category") != category
-            or item.get("status") != "published"
-        ):
-            raise ResourceNotFoundError("Service not found")
+        item = self.repository.visible_service_by_id(service_id)
+        if not item or item.get("category") != category:
+            raise ResourceNotFoundError("Service not found", code="NOT_FOUND")
         return self._build_service_item(item, include_products=True)
 
     def _build_service_item(self, item: dict, *, include_products: bool = False) -> ServiceItem:
@@ -93,3 +116,15 @@ class ClientServicesService:
                 self.product_projection_service.build_product_projection(item) for item in items
             )
         ]
+
+    @staticmethod
+    def _sort_items(items: list[ServiceItem], sort: str) -> list[ServiceItem]:
+        if sort == "price_asc":
+            return sorted(items, key=lambda item: item.unit_price_cents)
+        if sort == "price_desc":
+            return sorted(items, key=lambda item: item.unit_price_cents, reverse=True)
+        if sort == "name_asc":
+            return sorted(items, key=lambda item: item.name.lower())
+        if sort == "name_desc":
+            return sorted(items, key=lambda item: item.name.lower(), reverse=True)
+        return items

@@ -163,6 +163,15 @@ class ProviderBookingResponse(ProviderBookingBase):
     service_name: str = ""
     product_id: str
     product_name: str = ""
+    selected_product_ids: list[str] = Field(default_factory=list)
+    selected_products_snapshot: list[dict] = Field(default_factory=list)
+    subtotal_cents: int | None = Field(default=None, ge=0)
+    service_fee_cents: int | None = Field(default=None, ge=0)
+    tax_cents: int | None = Field(default=None, ge=0)
+    total_cents: int | None = Field(default=None, ge=0)
+    currency: str | None = None
+    fee_rate: float | None = None
+    tax_rate: float | None = None
     source: ProviderBookingSource
     status: ProviderBookingStatus
     status_label: str = ""

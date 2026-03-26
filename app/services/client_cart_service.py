@@ -37,13 +37,35 @@ class ClientCartService:
                 code="CART_DUPLICATE_ITEM",
             )
 
+        if payload.product_id:
+            lookup = self.repository.visible_product_by_service_and_id(
+                service_id=payload.service_id,
+                product_id=payload.product_id,
+            )
+            if not lookup:
+                raise ResourceNotFoundError("Service or product not found", code="NOT_FOUND")
+            service, product = lookup
+            product_name = payload.product_name or str(product.get("name") or "")
+            price = int(product.get("unit_price_cents", payload.unit_price_cents) or payload.unit_price_cents)
+            service_name = str(service.get("name") or payload.name)
+        else:
+            service = self.repository.visible_service_by_id(payload.service_id)
+            if not service:
+                raise ResourceNotFoundError("Service not found", code="NOT_FOUND")
+            price = int(service.get("unit_price_cents", payload.unit_price_cents) or payload.unit_price_cents)
+            service_name = str(service.get("name") or payload.name)
+            product_name = None
+
         created = self.repository.cart_create(
             user_id=user_id,
             item_id=payload.service_id,
             payload={
                 "name": payload.name,
                 "quantity": 1,
-                "unit_price_cents": payload.unit_price_cents,
+                "unit_price_cents": price,
+                "service_name": service_name,
+                "product_id": payload.product_id,
+                "product_name": product_name,
             },
         )
         return self._to_cart_item(created)
@@ -51,7 +73,7 @@ class ClientCartService:
     def remove(self, user_id: str, item_id: str) -> RemovedCartItemResponse:
         removed = self.repository.cart_delete(user_id, item_id)
         if not removed:
-            raise ResourceNotFoundError("Cart item not found")
+            raise ResourceNotFoundError("Cart item not found", code="NOT_FOUND")
         return RemovedCartItemResponse(item=self._to_cart_item(removed))
 
     def restore(self, user_id: str, payload: RestoreCartItemRequest) -> OkResponse:
@@ -62,6 +84,9 @@ class ClientCartService:
                 "name": payload.item.name,
                 "quantity": payload.item.quantity,
                 "unit_price_cents": payload.item.unit_price_cents,
+                "service_name": payload.item.service_name,
+                "product_id": payload.item.product_id,
+                "product_name": payload.item.product_name,
                 "restored_index": payload.index,
             },
         )
@@ -74,5 +99,7 @@ class ClientCartService:
             name=data["name"],
             quantity=int(data.get("quantity", 1)),
             unit_price_cents=int(data.get("unit_price_cents", 0)),
+            service_name=str(data.get("service_name") or data.get("name") or ""),
+            product_id=data.get("product_id"),
+            product_name=data.get("product_name"),
         )
-

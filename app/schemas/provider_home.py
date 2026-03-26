@@ -40,6 +40,8 @@ class ProviderNotificationResponse(BaseModel):
     booking_id: str = ""
     service_id: str = ""
     product_id: str = ""
+    selected_product_ids: list[str] = Field(default_factory=list)
+    selected_products_snapshot: list[dict] = Field(default_factory=list)
     event_date: str = ""
     is_unread: bool = True
     created_at: datetime
