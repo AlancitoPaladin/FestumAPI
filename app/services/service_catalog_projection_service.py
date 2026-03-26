@@ -23,14 +23,19 @@ class ServiceCatalogProjectionService:
 
     def build_service_projection(self, service: dict) -> dict:
         unit_price_cents = self._resolve_unit_price_cents(service)
-        image = self._resolve_primary_image(service)
+        images = self._resolve_signed_images(service)
+        image = next((item for item in images if item["is_main"]), images[0] if images else None)
         return {
             **service,
             "unit_price_cents": unit_price_cents,
             "price_label": self._build_price_label(unit_price_cents),
             "badge": self._build_badge(service),
             "image": image,
-            "image_url": image.url if image else "",
+            "main_image": image,
+            "image_url": image["url"] if image else "",
+            "main_image_url": image["url"] if image else "",
+            "image_urls": [item["url"] for item in images],
+            "images": images,
         }
 
     def _resolve_unit_price_cents(self, service: dict) -> int:
@@ -44,16 +49,36 @@ class ServiceCatalogProjectionService:
             return 0
         return derived_price
 
-    def _resolve_primary_image(self, service: dict):
-        image_source = str(service.get("main_image_key") or "")
-        if not image_source:
-            image_keys = list(service.get("image_keys") or [])
-            image_source = str(image_keys[0]) if image_keys else ""
+    def _resolve_signed_images(self, service: dict) -> list[dict]:
+        raw_keys = list(service.get("image_keys") or [])
+        if not raw_keys:
+            main_key = str(service.get("main_image_key") or "")
+            if main_key:
+                raw_keys = [main_key]
 
-        image_key = self.storage_service.extract_storage_key(image_source)
-        if not image_key:
-            return None
-        return self.storage_service.build_signed_asset(image_key)
+        normalized_keys: list[str] = []
+        for raw_key in raw_keys:
+            key = self.storage_service.extract_storage_key(str(raw_key))
+            if key and key not in normalized_keys:
+                normalized_keys.append(key)
+
+        main_key = self.storage_service.extract_storage_key(str(service.get("main_image_key") or ""))
+
+        images: list[dict] = []
+        for index, key in enumerate(normalized_keys):
+            signed_asset = self.storage_service.build_signed_asset(key)
+            images.append(
+                {
+                    "key": signed_asset.key,
+                    "url": signed_asset.url,
+                    "expires_at": signed_asset.expires_at,
+                    "is_main": key == main_key if main_key else index == 0,
+                }
+            )
+
+        if images and not any(item["is_main"] for item in images):
+            images[0]["is_main"] = True
+        return images
 
     def _build_badge(self, service: dict) -> str:
         category = str(service.get("category") or "")

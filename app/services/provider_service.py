@@ -69,7 +69,7 @@ class ProviderService:
             asset_type="logo",
             storage_path=storage_path,
             asset=signed_asset,
-            asset_url=asset_url,
+            asset_url=signed_asset.url,
         )
 
     def upload_photo(self, provider_id: str, file: UploadFile) -> ProviderBusinessAssetUploadResponse:
@@ -85,7 +85,7 @@ class ProviderService:
             asset_type="photo",
             storage_path=storage_path,
             asset=signed_asset,
-            asset_url=asset_url,
+            asset_url=signed_asset.url,
         )
 
     def _build_business_profile_response(
@@ -119,6 +119,10 @@ class ProviderService:
 
         logo_asset = self.storage_service.build_signed_asset(logo_key) if logo_key else None
         photo_assets = [self.storage_service.build_signed_asset(key) for key in photo_keys]
+        normalized_profile["logo_url"] = logo_asset.url if logo_asset else str(
+            normalized_profile.get("logo_url") or ""
+        )
+        normalized_profile["photo_urls"] = [asset.url for asset in photo_assets]
 
         return ProviderBusinessProfileResponse(
             id=provider_id,

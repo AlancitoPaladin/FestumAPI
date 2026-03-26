@@ -150,11 +150,19 @@ class ProviderServiceStatusUpdateResponse(BaseModel):
     ok: bool = True
 
 
+class ProviderServiceImageResponse(SignedAssetResponse):
+    is_main: bool = False
+
+
 class ProviderServiceResponse(ProviderServiceDocument):
     id: str
     provider_id: str
     image: SignedAssetResponse | None = None
+    main_image: SignedAssetResponse | None = None
     image_url: str = ""
+    main_image_url: str = ""
+    image_urls: list[str] = Field(default_factory=list)
+    images: list[ProviderServiceImageResponse] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 

@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.schemas.common_validators import normalize_email, normalize_phone, normalize_text
+
 
 ProviderBookingSource = Literal["manual", "client"]
 ProviderBookingStatus = Literal["pending", "confirmed", "rejected", "cancelled"]
@@ -30,17 +32,23 @@ class ProviderBookingBase(BaseModel):
         "event_type",
         "notes",
         "customer_image_url",
-        "contact_phone",
-        "contact_email",
         "event_location",
         "payment_details",
         mode="before",
     )
     @classmethod
     def normalize_text(cls, value: str | None) -> str:
-        if value is None:
-            return ""
-        return " ".join(str(value).split()).strip()
+        return normalize_text(value)
+
+    @field_validator("contact_phone", mode="before")
+    @classmethod
+    def normalize_contact_phone(cls, value: str | None) -> str:
+        return normalize_phone(value)
+
+    @field_validator("contact_email", mode="before")
+    @classmethod
+    def normalize_contact_email(cls, value: str | None) -> str:
+        return normalize_email(value)
 
     @field_validator("start_time", "end_time", mode="before")
     @classmethod
@@ -104,8 +112,6 @@ class ProviderBookingUpdate(BaseModel):
         "event_type",
         "notes",
         "customer_image_url",
-        "contact_phone",
-        "contact_email",
         "event_location",
         "payment_details",
         mode="before",
@@ -114,7 +120,21 @@ class ProviderBookingUpdate(BaseModel):
     def normalize_text(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        return " ".join(str(value).split()).strip()
+        return normalize_text(value)
+
+    @field_validator("contact_phone", mode="before")
+    @classmethod
+    def normalize_optional_contact_phone(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return normalize_phone(value)
+
+    @field_validator("contact_email", mode="before")
+    @classmethod
+    def normalize_optional_contact_email(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return normalize_email(value)
 
     @field_validator("start_time", "end_time", mode="before")
     @classmethod

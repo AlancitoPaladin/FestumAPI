@@ -35,6 +35,12 @@ class ProviderNotificationResponse(BaseModel):
     id: str
     title: str
     subtitle: str
+    type: str = ""
+    source: str = ""
+    booking_id: str = ""
+    service_id: str = ""
+    product_id: str = ""
+    event_date: str = ""
     is_unread: bool = True
     created_at: datetime
     updated_at: datetime

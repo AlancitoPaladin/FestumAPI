@@ -27,6 +27,53 @@ class ProviderHomeRepository:
         except (PermissionDenied, GoogleAPICallError, RetryError) as exc:
             self._raise_firestore_unavailable(exc)
 
+    def upsert_notification(
+        self,
+        provider_id: str,
+        notification_id: str,
+        payload: dict,
+    ) -> dict:
+        try:
+            document_ref = self._notifications_collection(provider_id).document(notification_id)
+            document = document_ref.get()
+            now = datetime.now(tz=timezone.utc)
+            if document.exists:
+                current_data = document.to_dict()
+                data = {
+                    **current_data,
+                    **payload,
+                    "is_unread": bool(current_data.get("is_unread", True)),
+                    "created_at": current_data.get("created_at", now),
+                    "updated_at": now,
+                }
+            else:
+                data = {
+                    **payload,
+                    "is_unread": True,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            document_ref.set(data)
+            created_document = document_ref.get()
+            return {"id": created_document.id, **created_document.to_dict()}
+        except (PermissionDenied, GoogleAPICallError, RetryError) as exc:
+            self._raise_firestore_unavailable(exc)
+
+    def delete_notifications_by_ids(self, provider_id: str, notification_ids: list[str]) -> int:
+        try:
+            unique_ids = [item for item in dict.fromkeys(notification_ids) if item]
+            if not unique_ids:
+                return 0
+
+            batch = self.db.batch()
+            collection = self._notifications_collection(provider_id)
+            for notification_id in unique_ids:
+                batch.delete(collection.document(notification_id))
+            batch.commit()
+            return len(unique_ids)
+        except (PermissionDenied, GoogleAPICallError, RetryError) as exc:
+            self._raise_firestore_unavailable(exc)
+
     def mark_notification_as_read(self, provider_id: str, notification_id: str) -> dict:
         try:
             document_ref = self._notifications_collection(provider_id).document(notification_id)

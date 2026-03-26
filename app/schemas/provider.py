@@ -3,6 +3,12 @@ from datetime import datetime
 from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.asset import SignedAssetResponse
+from app.schemas.common_validators import (
+    normalize_phone,
+    normalize_social_handle,
+    normalize_text,
+    normalize_website,
+)
 
 
 class ProviderBusinessProfileBase(BaseModel):
@@ -21,26 +27,39 @@ class ProviderBusinessProfileBase(BaseModel):
         "business_name",
         "location",
         "coverage_area",
-        "contact_number",
-        "whatsapp",
-        "instagram",
-        "facebook",
-        "website",
         "logo_url",
         mode="before",
     )
     @classmethod
     def normalize_text(cls, value: str | None) -> str:
-        if value is None:
-            return ""
-        return " ".join(str(value).split()).strip()
+        return normalize_text(value)
+
+    @field_validator("contact_number", "whatsapp", mode="before")
+    @classmethod
+    def normalize_phone_fields(cls, value: str | None) -> str:
+        return normalize_phone(value)
+
+    @field_validator("instagram", mode="before")
+    @classmethod
+    def normalize_instagram(cls, value: str | None) -> str:
+        return normalize_social_handle(value)
+
+    @field_validator("facebook", mode="before")
+    @classmethod
+    def normalize_facebook(cls, value: str | None) -> str:
+        return normalize_text(value)
+
+    @field_validator("website", mode="before")
+    @classmethod
+    def normalize_website_field(cls, value: str | None) -> str:
+        return normalize_website(value)
 
     @field_validator("photo_urls", mode="before")
     @classmethod
     def normalize_photo_urls(cls, value: list[str] | None) -> list[str]:
         if value is None:
             return []
-        return [" ".join(str(item).split()).strip() for item in value if str(item).strip()]
+        return [normalize_text(str(item)) for item in value if str(item).strip()]
 
 
 class ProviderBusinessProfileUpsert(ProviderBusinessProfileBase):
