@@ -1,4 +1,5 @@
 from datetime import date
+import logging
 
 from app.core.exceptions import ResourceNotFoundError
 from app.repositories.provider_availability_repository import ProviderAvailabilityRepository
@@ -14,6 +15,9 @@ from app.schemas.provider_booking import (
     ProviderBookingStatusUpdate,
     ProviderManualBookingCreate,
 )
+from app.services.push_notification_service import PushNotificationService
+
+logger = logging.getLogger(__name__)
 
 
 class ProviderBookingService:
@@ -22,6 +26,7 @@ class ProviderBookingService:
         self.product_repository = ProviderProductRepository()
         self.service_repository = ProviderServiceRepository()
         self.availability_repository = ProviderAvailabilityRepository()
+        self.push_notification_service = PushNotificationService()
 
     def create_manual_booking(
         self,
@@ -203,6 +208,8 @@ class ProviderBookingService:
             )
             raise
 
+        self._notify_client_booking_status_change(updated_booking)
+
         return self._to_response(updated_booking)
 
     def count_confirmed_for_month(self, provider_id: str, target_date: date) -> int:
@@ -319,3 +326,41 @@ class ProviderBookingService:
         if isinstance(event_date, date):
             return event_date.isoformat()
         return str(event_date)
+
+    def _notify_client_booking_status_change(self, booking: dict) -> None:
+        client_id = str(booking.get("client_id") or "")
+        if not client_id:
+            return
+        booking_id = str(booking.get("id") or "")
+        order_id = str(booking.get("order_id") or "")
+        status = str(booking.get("status") or "")
+        try:
+            self.push_notification_service.send_to_user(
+                user_id=client_id,
+                title="Estado de reservacion actualizado",
+                body=f"Tu reservacion ahora esta en estado {status}.",
+                data={
+                    "type": "reservation_updated",
+                    "order_id": order_id,
+                    "request_id": booking_id,
+                    "target_screen": "client_orders",
+                },
+                context={
+                    "actor": "provider",
+                    "provider_id": str(booking.get("provider_id") or ""),
+                    "client_id": client_id,
+                    "order_id": order_id,
+                    "request_id": booking_id,
+                    "trace_id": booking_id,
+                },
+            )
+        except Exception:
+            logger.exception(
+                "push_reservation_status_update_failed",
+                extra={
+                    "client_id": client_id,
+                    "booking_id": booking_id,
+                    "order_id": order_id,
+                    "status": status,
+                },
+            )

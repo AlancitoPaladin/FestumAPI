@@ -8,12 +8,14 @@ class ApiError(Exception):
     message: str | None = None
     detail = "API error"
     code: str | None = None
+    meta: dict | None = None
 
     def __init__(
         self,
         detail: str | None = None,
         code: str | None = None,
         message: str | None = None,
+        meta: dict | None = None,
     ) -> None:
         if detail:
             self.detail = detail
@@ -21,6 +23,8 @@ class ApiError(Exception):
             self.code = code
         if message:
             self.message = message
+        if meta is not None:
+            self.meta = meta
 
 
 class ResourceNotFoundError(ApiError):
@@ -73,6 +77,8 @@ def register_exception_handlers(app: FastAPI) -> None:
             "detail": exc.detail,
             "code": exc.code or "API_ERROR",
         }
+        if exc.meta is not None:
+            payload["meta"] = exc.meta
         return JSONResponse(
             status_code=exc.status_code,
             content=payload,

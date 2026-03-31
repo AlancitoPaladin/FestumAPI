@@ -49,3 +49,15 @@ def get_firestore_client() -> firestore.Client:
         raise ServiceUnavailableError(
             "Failed to initialize Firestore client. Verify Firebase configuration."
         ) from exc
+
+
+def get_firebase_app() -> firebase_admin.App:
+    try:
+        _initialize_firebase()
+        return firebase_admin.get_app()
+    except ServiceUnavailableError:
+        raise
+    except Exception as exc:
+        raise ServiceUnavailableError(
+            "Failed to initialize Firebase app. Verify Firebase configuration."
+        ) from exc

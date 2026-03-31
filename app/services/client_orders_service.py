@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timezone
 import hashlib
 import logging
 from random import randint
@@ -35,6 +35,12 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
     "completed": set(),
     "cancelled": set(),
     "rejected": set(),
+}
+ACTIVE_ORDER_STATUSES: set[str] = {
+    "pending_provider_approval",
+    "pending_payment",
+    "confirmed",
+    "in_progress",
 }
 
 
@@ -211,6 +217,14 @@ class ClientOrdersService:
                 code="CHECKOUT_EMPTY_CART",
             )
 
+        checkout_key = self._build_checkout_key(current_user.id, source_items)
+        requested_service_ids = self._extract_service_ids(source_items)
+        self._validate_services_not_locked(
+            client_id=current_user.id,
+            service_ids=requested_service_ids,
+            exclude_checkout_key=checkout_key,
+        )
+
         validated_items: list[dict] = []
         provider_actions: list[dict] = []
         total_cents = 0
@@ -266,7 +280,12 @@ class ClientOrdersService:
             validated_items.append(validated_item)
             total_cents += unit_price_cents
 
-        checkout_key = self._build_checkout_key(current_user.id, source_items)
+        checkout_event_date = self._business_today()
+        self._validate_products_available_for_date(
+            event_date=checkout_event_date,
+            items=validated_items,
+        )
+
         order_id = f"FST-{checkout_key[:10].upper()}"
         primary_service = validated_items[0]["service_name"]
         title = (
@@ -296,7 +315,7 @@ class ClientOrdersService:
                         "selected_products_snapshot": item["selected_products_snapshot"],
                         "customer_name": customer_name or "Cliente",
                         "customer_image_url": "",
-                        "event_date": date.today().isoformat(),
+                        "event_date": checkout_event_date.isoformat(),
                         "has_specific_schedule": False,
                         "start_time": "",
                         "end_time": "",
@@ -312,6 +331,7 @@ class ClientOrdersService:
                         "source": "client",
                         "status": "pending",
                         "order_id": order_id,
+                        "client_id": current_user.id,
                     },
                     "notification_id": notification_id,
                     "notification_payload": {
@@ -401,7 +421,7 @@ class ClientOrdersService:
         if current_user.role != "client":
             raise ForbiddenError("Only client users can perform this action")
 
-        if payload.event_date < date.today():
+        if payload.event_date < self._business_today():
             event_date_error = ApiError(
                 detail="event_date cannot be in the past",
                 code="VALIDATION_ERROR",
@@ -412,6 +432,10 @@ class ClientOrdersService:
 
         validated_items: list[dict] = []
         total_cents = 0
+        self._validate_services_not_locked(
+            client_id=current_user.id,
+            service_ids=[item.service_id for item in payload.items],
+        )
         for item in payload.items:
             service = self.repository.service_by_id(item.service_id)
             if not service:
@@ -460,6 +484,11 @@ class ClientOrdersService:
                 }
             )
             total_cents += unit_price_cents
+
+        self._validate_products_available_for_date(
+            event_date=payload.event_date,
+            items=validated_items,
+        )
 
         order_id = f"FST-REQ-{randint(100000, 999999)}"
         primary_service = validated_items[0]["service_name"] if validated_items else "Servicio"
@@ -907,3 +936,116 @@ class ClientOrdersService:
         if price_value <= 0:
             return None
         return int(round(price_value * 100))
+
+    @staticmethod
+    def _extract_service_ids(items: list[dict]) -> list[str]:
+        service_ids: list[str] = []
+        for item in items:
+            service_id = str(item.get("id") or item.get("service_id") or "").strip()
+            if service_id:
+                service_ids.append(service_id)
+        return list(dict.fromkeys(service_ids))
+
+    def _validate_services_not_locked(
+        self,
+        *,
+        client_id: str,
+        service_ids: list[str],
+        exclude_checkout_key: str | None = None,
+    ) -> None:
+        unique_service_ids = list(dict.fromkeys([service_id for service_id in service_ids if service_id]))
+        if not unique_service_ids:
+            return
+
+        active_orders = self._list_active_orders(client_id)
+        blocked_service_ids: set[str] = set()
+        blocking_order_ids: set[str] = set()
+        requested_service_set = set(unique_service_ids)
+
+        for order in active_orders:
+            if exclude_checkout_key and str(order.get("checkout_key") or "") == exclude_checkout_key:
+                continue
+            order_id = str(order.get("id") or "")
+            for item in list(order.get("items") or []):
+                order_service_id = str(item.get("service_id") or item.get("id") or "")
+                if order_service_id and order_service_id in requested_service_set:
+                    blocked_service_ids.add(order_service_id)
+                    if order_id:
+                        blocking_order_ids.add(order_id)
+
+        if blocked_service_ids:
+            conflict = ApiError(
+                detail="The service cannot be requested again until previous order is completed or cancelled",
+                code="SERVICE_ALREADY_IN_ACTIVE_ORDER",
+                message="Service already has an active order",
+                meta={
+                    "service_ids": sorted(blocked_service_ids),
+                    "blocking_order_ids": sorted(blocking_order_ids),
+                },
+            )
+            conflict.status_code = 409
+            raise conflict
+
+    def _list_active_orders(self, client_id: str) -> list[dict]:
+        if hasattr(self.repository, "list_orders_by_statuses"):
+            return list(
+                self.repository.list_orders_by_statuses(
+                    client_id,
+                    sorted(ACTIVE_ORDER_STATUSES),
+                )
+            )
+
+        orders = list(self.repository.order_list(client_id))
+        return [order for order in orders if str(order.get("status") or "") in ACTIVE_ORDER_STATUSES]
+
+    def _validate_products_available_for_date(
+        self,
+        *,
+        event_date: date,
+        items: list[dict],
+    ) -> None:
+        date_key = event_date.isoformat()
+        conflicts: list[dict] = []
+
+        for item in items:
+            provider_id = str(item.get("provider_id") or "")
+            service_id = str(item.get("service_id") or "")
+            selected_product_ids = list(item.get("selected_product_ids") or [])
+            if not selected_product_ids:
+                legacy_product_id = str(item.get("product_id") or "").strip()
+                selected_product_ids = [legacy_product_id] if legacy_product_id else []
+
+            for product_id in selected_product_ids:
+                if not provider_id or not service_id or not product_id:
+                    continue
+                status = self.availability_repository.get_date_status(
+                    provider_id=provider_id,
+                    service_id=service_id,
+                    product_id=product_id,
+                    date_key=date_key,
+                )
+                if status in {"reserved", "blocked"}:
+                    conflicts.append(
+                        {
+                            "service_id": service_id,
+                            "product_id": product_id,
+                            "status": status,
+                        }
+                    )
+
+        if conflicts:
+            conflict_error = ApiError(
+                detail="Availability conflict on selected date",
+                code="PRODUCT_NOT_AVAILABLE_FOR_DATE",
+                message="One or more products are not available for the selected date",
+                meta={
+                    "event_date": date_key,
+                    "conflicts": conflicts,
+                },
+            )
+            conflict_error.status_code = 409
+            raise conflict_error
+
+    @staticmethod
+    def _business_today() -> date:
+        return datetime.now(tz=timezone.utc).date()

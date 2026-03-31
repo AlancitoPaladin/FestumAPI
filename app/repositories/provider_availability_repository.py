@@ -65,6 +65,26 @@ class ProviderAvailabilityRepository:
         except (PermissionDenied, GoogleAPICallError, RetryError) as exc:
             self._raise_firestore_unavailable(exc)
 
+    def get_date_status(
+        self,
+        provider_id: str,
+        service_id: str,
+        product_id: str,
+        date_key: str,
+    ) -> str:
+        try:
+            document_ref = self._availability_collection(provider_id, service_id, product_id).document(date_key)
+            document = document_ref.get()
+            if not document.exists:
+                return "available"
+            data = document.to_dict() or {}
+            status = str(data.get("status") or "available")
+            if status not in {"available", "reserved", "blocked"}:
+                return "blocked"
+            return status
+        except (PermissionDenied, GoogleAPICallError, RetryError) as exc:
+            self._raise_firestore_unavailable(exc)
+
     def unblock_date(
         self, provider_id: str, service_id: str, product_id: str, date_key: str
     ) -> dict:

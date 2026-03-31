@@ -77,6 +77,15 @@ class ClientRepository:
         except (PermissionDenied, GoogleAPICallError, RetryError) as exc:
             self._raise_firestore_unavailable(exc)
 
+    def list_orders_by_statuses(self, user_id: str, statuses: list[str]) -> list[dict]:
+        try:
+            if not statuses:
+                return []
+            docs = self._orders_collection(user_id).where("status", "in", statuses).stream()
+            return [{"id": doc.id, **doc.to_dict()} for doc in docs]
+        except (PermissionDenied, GoogleAPICallError, RetryError) as exc:
+            self._raise_firestore_unavailable(exc)
+
     def order_create(self, user_id: str, payload: dict) -> dict:
         try:
             now = datetime.now(tz=timezone.utc)

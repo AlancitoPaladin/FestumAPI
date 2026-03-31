@@ -32,6 +32,9 @@ class _FakeCheckoutRepository:
     def cart_list(self, user_id: str) -> list[dict]:
         return list(self._cart_items)
 
+    def list_orders_by_statuses(self, user_id: str, statuses: list[str]) -> list[dict]:
+        return []
+
     def service_by_id(self, service_id: str) -> dict | None:
         return {
             "id": service_id,
@@ -125,6 +128,14 @@ class _FakeCheckoutRepository:
         }
 
 
+class _FakeAvailabilityRepository:
+    def __init__(self, status_by_key: dict[tuple[str, str, str, str], str] | None = None) -> None:
+        self.status_by_key = status_by_key or {}
+
+    def get_date_status(self, provider_id: str, service_id: str, product_id: str, date_key: str) -> str:
+        return self.status_by_key.get((provider_id, service_id, product_id, date_key), "available")
+
+
 def test_checkout_without_product_still_works_with_service_base_price() -> None:
     service = ClientOrdersService()
     service.repository = _FakeCheckoutRepository(
@@ -137,6 +148,7 @@ def test_checkout_without_product_still_works_with_service_base_price() -> None:
         ],
         service_has_products=True,
     )
+    service.availability_repository = _FakeAvailabilityRepository()
 
     response = service.checkout(_build_client_user())
 
@@ -160,6 +172,7 @@ def test_checkout_with_product_creates_order_reservation_and_notification() -> N
         service_has_products=True,
     )
     service.repository = fake_repo
+    service.availability_repository = _FakeAvailabilityRepository()
 
     response = service.checkout(_build_client_user())
 
@@ -185,6 +198,7 @@ def test_checkout_with_invalid_selected_products_returns_422() -> None:
         ],
         service_has_products=True,
     )
+    service.availability_repository = _FakeAvailabilityRepository()
 
     with pytest.raises(ApiError) as exc:
         service.checkout(_build_client_user())
@@ -207,6 +221,7 @@ def test_checkout_with_selected_product_uses_real_price_field_for_snapshot_and_t
         service_has_products=True,
     )
     service.repository = fake_repo
+    service.availability_repository = _FakeAvailabilityRepository()
 
     response = service.checkout(_build_client_user())
 
@@ -230,6 +245,7 @@ def test_checkout_with_multiple_selected_products_sums_exactly() -> None:
         service_has_products=True,
     )
     service.repository = fake_repo
+    service.availability_repository = _FakeAvailabilityRepository()
 
     response = service.checkout(_build_client_user())
     assert response.items[0].total_item_cents == 400000
@@ -250,8 +266,47 @@ def test_checkout_rejects_selected_product_with_zero_price() -> None:
         service_has_products=True,
     )
     service.repository = fake_repo
+    service.availability_repository = _FakeAvailabilityRepository()
 
     with pytest.raises(ApiError) as exc:
         service.checkout(_build_client_user())
     assert exc.value.status_code == 422
     assert exc.value.code == "INVALID_SELECTED_PRODUCTS"
+
+
+def test_checkout_rejects_when_selected_product_is_reserved_for_business_today() -> None:
+    service = ClientOrdersService()
+    fake_repo = _FakeCheckoutRepository(
+        cart_items=[
+            {
+                "id": "svc-1",
+                "service_name": "Salon BJ",
+                "selected_product_ids": ["prod-1"],
+                "unit_price_cents": 200000,
+            }
+        ],
+        service_has_products=True,
+    )
+    service.repository = fake_repo
+    business_date = service._business_today().isoformat()
+    service.availability_repository = _FakeAvailabilityRepository(
+        {
+            ("provider-1", "svc-1", "prod-1", business_date): "reserved",
+        }
+    )
+
+    with pytest.raises(ApiError) as exc:
+        service.checkout(_build_client_user())
+
+    assert exc.value.status_code == 409
+    assert exc.value.code == "PRODUCT_NOT_AVAILABLE_FOR_DATE"
+    assert exc.value.meta == {
+        "event_date": business_date,
+        "conflicts": [
+            {
+                "service_id": "svc-1",
+                "product_id": "prod-1",
+                "status": "reserved",
+            }
+        ],
+    }

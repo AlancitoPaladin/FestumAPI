@@ -147,7 +147,7 @@ class ProviderAvailabilityService:
             days.append(
                 {
                     "date": date_key,
-                    "status": status_by_date.get(date_key, "available"),
+                    "status": self._normalize_status(status_by_date.get(date_key, "available")),
                 }
             )
 
@@ -157,6 +157,13 @@ class ProviderAvailabilityService:
             "month": month,
             "days": days,
         }
+
+    @staticmethod
+    def _normalize_status(raw_status: object) -> str:
+        normalized = str(raw_status or "available")
+        if normalized not in {"available", "reserved", "blocked"}:
+            return "blocked"
+        return normalized
 
     def _build_booking_summary(
         self,
