@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.schemas.asset import SignedAssetResponse
 from app.schemas.provider_service import ProviderServiceCategory
@@ -158,6 +158,8 @@ class ProviderProductCreate(ProviderProductFields):
 
 
 class ProviderProductUpdate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     name: str | None = Field(default=None, min_length=2, max_length=120)
     description: str | None = Field(default=None, max_length=1500)
     price: float | None = Field(default=None, ge=0)

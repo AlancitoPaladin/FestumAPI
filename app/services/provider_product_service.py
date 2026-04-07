@@ -1,4 +1,5 @@
 from fastapi import UploadFile
+from pydantic import ValidationError
 
 from app.core.exceptions import ApiError, ResourceNotFoundError
 from app.core.config import get_settings
@@ -15,6 +16,7 @@ from app.schemas.provider_product import (
     ProviderProductResponse,
     ProviderProductStatusUpdate,
     ProviderProductStatusUpdateResponse,
+    ProviderProductFields,
     ProviderProductUpdate,
     ProviderProductValidated,
 )
@@ -103,17 +105,15 @@ class ProviderProductService:
             raise ResourceNotFoundError("Provider product not found")
 
         normalized_update = self._normalize_update_payload(current_product, payload.model_dump(exclude_none=True))
-        merged_payload = {
-            **current_product,
-            **normalized_update,
-        }
-        ProviderProductValidated(category=parent_service["category"], **merged_payload)
 
         product = self.repository.update(
             provider_id=provider_id,
             service_id=service_id,
             product_id=product_id,
-            data=normalized_update,
+            data={
+                **normalized_update,
+                "category": parent_service["category"],
+            },
         )
         return self._build_product_response(product)
 
@@ -143,12 +143,21 @@ class ProviderProductService:
         if not product:
             raise ResourceNotFoundError("Provider product not found")
 
+        parent_service = self._get_parent_service(provider_id, product["service_id"])
         self._validate_status_transition(str(product.get("status", "draft")), payload.status)
+        if payload.status == "published":
+            self._ensure_publishable(
+                product=product,
+                category=parent_service["category"],
+            )
         self.repository.update(
             provider_id=provider_id,
             service_id=product["service_id"],
             product_id=product_id,
-            data={"status": payload.status},
+            data={
+                "status": payload.status,
+                "category": parent_service["category"],
+            },
         )
         return ProviderProductStatusUpdateResponse(ok=True)
 
@@ -432,6 +441,18 @@ class ProviderProductService:
             raise ResourceNotFoundError("Provider service not found")
         return service
 
+    def _ensure_publishable(self, product: dict, category: str) -> None:
+        validation_payload = {
+            field_name: product[field_name]
+            for field_name in ProviderProductFields.model_fields
+            if field_name in product
+        }
+
+        try:
+            ProviderProductValidated(category=category, **validation_payload)
+        except ValidationError as exc:
+            raise ApiError(self._format_validation_error(exc)) from exc
+
     @staticmethod
     def _validate_status_transition(current_status: str, next_status: str) -> None:
         transitions = {
@@ -491,3 +512,13 @@ class ProviderProductService:
         if not storage_key:
             return None
         return storage_service.build_signed_asset(storage_key)
+
+    @staticmethod
+    def _format_validation_error(exc: ValidationError) -> str:
+        messages: list[str] = []
+        for error in exc.errors():
+            raw_message = str(error.get("msg", "Invalid product payload"))
+            message = raw_message.removeprefix("Value error, ").strip()
+            location = ".".join(str(part) for part in error.get("loc", ()) if part != "__root__")
+            messages.append(f"{location}: {message}" if location else message)
+        return "; ".join(dict.fromkeys(messages)) or "Invalid product payload"
