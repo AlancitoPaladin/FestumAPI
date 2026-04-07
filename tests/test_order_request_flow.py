@@ -65,6 +65,9 @@ class _FakeClientRepo:
     def product_by_service_and_id(self, provider_id: str, service_id: str, product_id: str) -> dict | None:
         return None
 
+    def list_orders_by_statuses(self, user_id: str, statuses: list[str]) -> list[dict]:
+        return []
+
 
 class _FakeOrderRequestRepo:
     def __init__(self) -> None:
@@ -88,6 +91,7 @@ def test_order_request_without_product_still_works_with_service_base_price() -> 
     service = ClientOrdersService()
     service.repository = _FakeClientRepo(has_products=True)
     service.order_request_repository = _FakeOrderRequestRepo()
+    service.availability_repository = _FakeAvailabilityRepo()
 
     payload = CreateOrderRequestPayload(
         event_date=date.today(),
@@ -104,6 +108,7 @@ def test_order_request_create_pending_provider_approval() -> None:
     service.repository = _FakeClientRepo(has_products=True)
     fake_request_repo = _FakeOrderRequestRepo()
     service.order_request_repository = fake_request_repo
+    service.availability_repository = _FakeAvailabilityRepo()
 
     payload = CreateOrderRequestPayload(
         event_date=date.today(),
@@ -121,6 +126,7 @@ def test_order_request_with_selected_products_uses_real_price() -> None:
     service.repository = _FakeClientRepo(has_products=True)
     fake_request_repo = _FakeOrderRequestRepo()
     service.order_request_repository = fake_request_repo
+    service.availability_repository = _FakeAvailabilityRepo()
 
     payload = CreateOrderRequestPayload(
         event_date=date.today(),
@@ -197,6 +203,7 @@ class _FakeBookingRepo:
 class _FakeAvailabilityRepo:
     def __init__(self) -> None:
         self.reserved = 0
+        self.status_by_key: dict[tuple[str, str, str, str], str] = {}
 
     def reserve_date(self, provider_id: str, service_id: str, product_id: str, date_key: str, booking_summary: dict) -> dict:
         self.reserved += 1
@@ -205,12 +212,41 @@ class _FakeAvailabilityRepo:
     def clear_reserved_date(self, provider_id: str, service_id: str, product_id: str, date_key: str, booking_id: str) -> dict:
         return {}
 
+    def get_date_status(self, provider_id: str, service_id: str, product_id: str, date_key: str) -> str:
+        return self.status_by_key.get((provider_id, service_id, product_id, date_key), "available")
+
+
+class _FakePushNotificationService:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def send_to_user(
+        self,
+        *,
+        user_id: str,
+        title: str,
+        body: str,
+        data: dict | None = None,
+        context: dict | None = None,
+    ) -> dict:
+        self.calls.append(
+            {
+                "user_id": user_id,
+                "title": title,
+                "body": body,
+                "data": data or {},
+                "context": context or {},
+            }
+        )
+        return {"sent": 1, "failed": 0, "removed": 0, "total": 1}
+
 
 def test_provider_accepts_request_creates_booking_and_blocks_availability() -> None:
     service = ProviderOrderRequestService()
     service.repository = _FakeProviderRequestRepo()
     service.booking_repository = _FakeBookingRepo()
     service.availability_repository = _FakeAvailabilityRepo()
+    service.push_notification_service = _FakePushNotificationService()
 
     response = service.decide_request(
         "provider-1",
@@ -220,6 +256,8 @@ def test_provider_accepts_request_creates_booking_and_blocks_availability() -> N
     assert response.order.status == "confirmed"
     assert service.booking_repository.created == 1
     assert service.availability_repository.reserved == 1
+    assert len(service.push_notification_service.calls) == 1
+    assert service.push_notification_service.calls[0]["data"]["type"] == "order_accepted"
 
 
 def test_provider_rejects_request_marks_client_order_cancelled() -> None:
@@ -227,6 +265,7 @@ def test_provider_rejects_request_marks_client_order_cancelled() -> None:
     service.repository = _FakeProviderRequestRepo()
     service.booking_repository = _FakeBookingRepo()
     service.availability_repository = _FakeAvailabilityRepo()
+    service.push_notification_service = _FakePushNotificationService()
 
     response = service.decide_request(
         "provider-1",
@@ -234,3 +273,5 @@ def test_provider_rejects_request_marks_client_order_cancelled() -> None:
         ProviderOrderRequestDecisionPayload(decision="rejected"),
     )
     assert response.order.status == "cancelled"
+    assert len(service.push_notification_service.calls) == 1
+    assert service.push_notification_service.calls[0]["data"]["type"] == "order_rejected"

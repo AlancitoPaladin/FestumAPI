@@ -1,3 +1,5 @@
+import logging
+
 from app.core.exceptions import ApiError, ResourceConflictError, ResourceNotFoundError
 from app.repositories.order_request_repository import OrderRequestRepository
 from app.repositories.provider_availability_repository import ProviderAvailabilityRepository
@@ -10,6 +12,9 @@ from app.schemas.provider_order_request import (
     ProviderOrderRequestResponse,
     ProviderOrderSummaryResponse,
 )
+from app.services.push_notification_service import PushNotificationService
+
+logger = logging.getLogger(__name__)
 
 
 class ProviderOrderRequestService:
@@ -17,6 +22,7 @@ class ProviderOrderRequestService:
         self.repository = OrderRequestRepository()
         self.booking_repository = ProviderBookingRepository()
         self.availability_repository = ProviderAvailabilityRepository()
+        self.push_notification_service = PushNotificationService()
 
     def list_requests(
         self,
@@ -92,6 +98,7 @@ class ProviderOrderRequestService:
                         "source": "client",
                         "status": "confirmed",
                         "order_id": order_id,
+                        "client_id": client_id,
                     }
                     self.booking_repository.create(provider_id, booking_id, booking_payload)
                     if product_id:
@@ -123,6 +130,14 @@ class ProviderOrderRequestService:
         except Exception:
             self._rollback_created_bookings(provider_id, created_bookings)
             raise
+
+        self._notify_client_order_request_decision(
+            provider_id=provider_id,
+            client_id=client_id,
+            request_id=request_id,
+            order_id=order_id,
+            decision=decision,
+        )
 
         return ProviderOrderRequestDecisionResponse(
             order=ProviderOrderSummaryResponse(
@@ -180,3 +195,49 @@ class ProviderOrderRequestService:
                     date_key=event_date,
                     booking_id=booking_id,
                 )
+
+    def _notify_client_order_request_decision(
+        self,
+        *,
+        provider_id: str,
+        client_id: str,
+        request_id: str,
+        order_id: str,
+        decision: str,
+    ) -> None:
+        notification_type = "order_accepted" if decision == "accepted" else "order_rejected"
+        body = (
+            "Tu solicitud fue aceptada por el proveedor."
+            if decision == "accepted"
+            else "Tu solicitud fue rechazada por el proveedor."
+        )
+        try:
+            self.push_notification_service.send_to_user(
+                user_id=client_id,
+                title="Solicitud de orden actualizada",
+                body=body,
+                data={
+                    "type": notification_type,
+                    "order_id": order_id,
+                    "request_id": request_id,
+                    "target_screen": "client_orders",
+                },
+                context={
+                    "actor": "provider",
+                    "provider_id": provider_id,
+                    "client_id": client_id,
+                    "order_id": order_id,
+                    "request_id": request_id,
+                    "trace_id": request_id,
+                },
+            )
+        except Exception:
+            logger.exception(
+                "push_order_request_decision_failed",
+                extra={
+                    "client_id": client_id,
+                    "request_id": request_id,
+                    "order_id": order_id,
+                    "decision": decision,
+                },
+            )
