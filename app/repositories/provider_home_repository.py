@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from google.api_core.exceptions import GoogleAPICallError, PermissionDenied, RetryError
+from google.cloud.firestore_v1.base_query import FieldFilter
 
 from app.core.exceptions import ResourceNotFoundError, ServiceUnavailableError
 from app.core.firebase import get_firestore_client
@@ -98,7 +99,9 @@ class ProviderHomeRepository:
     def mark_all_notifications_as_read(self, provider_id: str) -> int:
         try:
             collection = self._notifications_collection(provider_id)
-            documents = list(collection.where("is_unread", "==", True).stream())
+            documents = list(
+                collection.where(filter=FieldFilter("is_unread", "==", True)).stream()
+            )
             if not documents:
                 return 0
 

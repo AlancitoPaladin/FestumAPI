@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, RootModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.asset import SignedAssetResponse
 
@@ -78,6 +78,25 @@ class OrderItem(BaseModel):
 
 class OrdersResponse(BaseModel):
     items: list[OrderItem]
+
+
+class OrderListItem(BaseModel):
+    id: str
+    title: str = Field(..., min_length=3, max_length=180)
+    status: OrderStatus
+    total_cents: int | None = Field(default=None, ge=0)
+    total_label: str = Field(..., min_length=1, max_length=80)
+    created_at: datetime | None = None
+    service_name: str | None = None
+
+
+class OrdersListResponse(BaseModel):
+    items: list[OrderListItem]
+
+
+class ActiveServiceIdsResponse(BaseModel):
+    service_ids: list[str] = Field(default_factory=list)
+    total: int = Field(default=0, ge=0)
 
 
 class CreateOrderRequest(BaseModel):
@@ -198,11 +217,47 @@ class ServiceItem(BaseModel):
     short_subtitle: str | None = None
     image: SignedAssetResponse | None = None
     image_url: str = ""
+    images: list[dict] = Field(default_factory=list)
+    image_urls: list[str] = Field(default_factory=list)
     products: list[ClientProductItem] = Field(default_factory=list)
 
 
-class HomeServicesResponse(RootModel[dict[str, list[ServiceItem]]]):
-    pass
+class HomeServicesResponse(BaseModel):
+    salones_sociales: list[ServiceItem] = Field(default_factory=list, alias="salones-sociales")
+    mobiliario: list[ServiceItem] = Field(default_factory=list)
+    banquetes: list[ServiceItem] = Field(default_factory=list)
+    dj: list[ServiceItem] = Field(default_factory=list)
+    decoracion: list[ServiceItem] = Field(default_factory=list)
+    fotografia: list[ServiceItem] = Field(default_factory=list)
+    entretenimiento: list[ServiceItem] = Field(default_factory=list)
+    otros: list[ServiceItem] = Field(default_factory=list)
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class BootstrapCartSummary(BaseModel):
+    count: int = Field(default=0, ge=0)
+    service_ids: list[str] = Field(default_factory=list)
+
+
+class BootstrapOrdersSummary(BaseModel):
+    count: int = Field(default=0, ge=0)
+
+
+class BootstrapLocksSummary(BaseModel):
+    active_service_ids: list[str] = Field(default_factory=list)
+
+
+class BootstrapMeta(BaseModel):
+    generated_at: datetime
+
+
+class ClientBootstrapResponse(BaseModel):
+    home: HomeServicesResponse
+    cart: BootstrapCartSummary
+    orders: BootstrapOrdersSummary
+    locks: BootstrapLocksSummary
+    meta: BootstrapMeta
 
 
 class ServiceListResponse(BaseModel):

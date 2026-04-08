@@ -2,6 +2,7 @@ from datetime import date, datetime, timezone
 import hashlib
 import logging
 from random import randint
+from time import perf_counter
 from uuid import uuid4
 
 from app.core.config import get_settings
@@ -10,6 +11,7 @@ from app.repositories.client_repository import ClientRepository
 from app.repositories.order_request_repository import OrderRequestRepository
 from app.repositories.provider_availability_repository import ProviderAvailabilityRepository
 from app.schemas.client import (
+    ActiveServiceIdsResponse,
     CheckoutItemResponse,
     CheckoutOrderResponse,
     CheckoutProviderEffectsResponse,
@@ -17,12 +19,23 @@ from app.schemas.client import (
     CheckoutResponse,
     CreateOrderRequestPayload,
     CreateOrderRequest,
+    OrderListItem,
     OrderRequestCreateResponse,
+    OrdersListResponse,
     OkResponse,
     OrderItem,
     OrdersResponse,
     UpdateOrderStatusRequest,
 )
+from app.services.client_cache import (
+    client_cache,
+    invalidate_user_bootstrap_cart_cache,
+    invalidate_user_bootstrap_locks_cache,
+    invalidate_user_bootstrap_orders_cache,
+    invalidate_user_orders_cache,
+    orders_cache_key,
+)
+from app.services.performance_logging import estimate_payload_bytes
 from app.schemas.user import UserResponse
 
 logger = logging.getLogger(__name__)
@@ -51,49 +64,149 @@ class ClientOrdersService:
         self.availability_repository = ProviderAvailabilityRepository()
         self.settings = get_settings()
 
-    def list_orders(self, user_id: str) -> OrdersResponse:
-        items = self.repository.order_list(user_id)
-        normalized: list[OrderItem] = []
-        for item in items:
-            enriched = self._enrich_order_payload(item)
-            missing_financials = any(
-                enriched.get(field) is None
-                for field in ("subtotal_cents", "service_fee_cents", "tax_cents", "total_cents")
-            )
-            if missing_financials:
-                self.repository.order_update_fields(
-                    user_id=user_id,
-                    order_id=str(enriched.get("id") or ""),
-                    payload={
-                        "subtotal_cents": None,
-                        "service_fee_cents": None,
-                        "tax_cents": None,
-                        "total_cents": None,
-                        "currency": self.settings.order_currency,
-                        "fee_rate": self.settings.order_fee_rate,
-                        "tax_rate": self.settings.order_tax_rate,
-                    },
-                )
+    def list_orders(
+        self,
+        user_id: str,
+        *,
+        include_items: bool = True,
+        include_metrics: bool = False,
+    ) -> OrdersResponse | OrdersListResponse | tuple[OrdersResponse | OrdersListResponse, dict]:
+        start_ts = perf_counter()
+        cache_key = orders_cache_key(user_id, include_items)
+        cached = client_cache.get(cache_key)
+        if cached is not None:
+            response: OrdersResponse | OrdersListResponse
+            if include_items:
+                response = OrdersResponse.model_validate(cached)
             else:
-                self.repository.order_update_fields(
-                    user_id=user_id,
-                    order_id=str(enriched.get("id") or ""),
-                    payload={
-                        "items": enriched.get("items", []),
-                        "subtotal_cents": enriched.get("subtotal_cents"),
-                        "service_fee_cents": enriched.get("service_fee_cents"),
-                        "tax_cents": enriched.get("tax_cents"),
-                        "total_cents": enriched.get("total_cents"),
-                        "currency": enriched.get("currency"),
-                        "fee_rate": enriched.get("fee_rate"),
-                        "tax_rate": enriched.get("tax_rate"),
-                        "total_label": enriched.get("total_label"),
-                    },
+                response = OrdersListResponse.model_validate(cached)
+                metrics = {
+                    "total_ms": (perf_counter() - start_ts) * 1000,
+                    "db_ms": 0.0,
+                    "mapping_ms": 0.0,
+                    "db_reads": 0,
+                    "items_count": len(response.items),
+                    "payload_bytes": estimate_payload_bytes(response.model_dump()),
+                    "cache_hit": True,
+                }
+            return (response, metrics) if include_metrics else response
+
+        db_start = perf_counter()
+        items = self.repository.order_list(user_id)
+        db_ms = (perf_counter() - db_start) * 1000
+
+        map_start = perf_counter()
+        if include_items:
+            normalized = [OrderItem(**self._enrich_order_payload(item)) for item in items]
+            response = OrdersResponse(items=normalized)
+            client_cache.set(cache_key, response.model_dump(mode="json"), ttl_seconds=7)
+        else:
+            light_items = [self._to_order_list_item(item) for item in items]
+            response = OrdersListResponse(items=light_items)
+            client_cache.set(cache_key, response.model_dump(mode="json"), ttl_seconds=7)
+        mapping_ms = (perf_counter() - map_start) * 1000
+
+        metrics = {
+            "total_ms": (perf_counter() - start_ts) * 1000,
+            "db_ms": db_ms,
+            "mapping_ms": mapping_ms,
+            "db_reads": 1,
+            "items_count": len(response.items),
+            "payload_bytes": estimate_payload_bytes(response.model_dump()),
+            "cache_hit": False,
+        }
+        return (response, metrics) if include_metrics else response
+
+    def list_active_service_ids(
+        self,
+        user_id: str,
+        *,
+        include_metrics: bool = False,
+    ) -> ActiveServiceIdsResponse | tuple[ActiveServiceIdsResponse, dict]:
+        start_ts = perf_counter()
+        cache_key = f"client:orders:{user_id}:active-service-ids"
+        cached = client_cache.get(cache_key)
+        if cached is not None:
+            response = ActiveServiceIdsResponse.model_validate(cached)
+            metrics = {
+                "total_ms": (perf_counter() - start_ts) * 1000,
+                "db_ms": 0.0,
+                "mapping_ms": 0.0,
+                "db_reads": 0,
+                "items_count": 0,
+                "service_ids_count": len(response.service_ids),
+                "payload_bytes": estimate_payload_bytes(response.model_dump()),
+                "cache_hit": True,
+            }
+            return (response, metrics) if include_metrics else response
+
+        db_start = perf_counter()
+        if hasattr(self.repository, "list_order_status_and_items_by_statuses"):
+            active_orders = list(
+                self.repository.list_order_status_and_items_by_statuses(
+                    user_id,
+                    sorted(ACTIVE_ORDER_STATUSES),
                 )
+            )
+        else:
+            active_orders = self._list_active_orders(user_id)
+        db_ms = (perf_counter() - db_start) * 1000
 
-            normalized.append(OrderItem(**enriched))
+        map_start = perf_counter()
+        service_ids: list[str] = []
+        seen: set[str] = set()
+        for order in active_orders:
+            for item in list(order.get("items") or []):
+                service_id = str(item.get("service_id") or item.get("id") or "").strip()
+                if not service_id or service_id in seen:
+                    continue
+                seen.add(service_id)
+                service_ids.append(service_id)
+        mapping_ms = (perf_counter() - map_start) * 1000
 
-        return OrdersResponse(items=normalized)
+        response = ActiveServiceIdsResponse(
+            service_ids=service_ids,
+            total=len(service_ids),
+        )
+        client_cache.set(cache_key, response.model_dump(mode="json"), ttl_seconds=7)
+        metrics = {
+            "total_ms": (perf_counter() - start_ts) * 1000,
+            "db_ms": db_ms,
+            "mapping_ms": mapping_ms,
+            "db_reads": 1,
+            "items_count": len(active_orders),
+            "service_ids_count": len(service_ids),
+            "payload_bytes": estimate_payload_bytes(response.model_dump()),
+            "cache_hit": False,
+        }
+        return (response, metrics) if include_metrics else response
+
+    def get_order_detail(
+        self,
+        user_id: str,
+        order_id: str,
+        *,
+        include_metrics: bool = False,
+    ) -> OrderItem | tuple[OrderItem, dict]:
+        start_ts = perf_counter()
+        db_start = perf_counter()
+        item = self.repository.order_get(user_id, order_id)
+        db_ms = (perf_counter() - db_start) * 1000
+        if not item:
+            raise ResourceNotFoundError("Order not found", code="NOT_FOUND")
+
+        map_start = perf_counter()
+        response = OrderItem(**self._enrich_order_payload(item))
+        mapping_ms = (perf_counter() - map_start) * 1000
+        metrics = {
+            "total_ms": (perf_counter() - start_ts) * 1000,
+            "db_ms": db_ms,
+            "mapping_ms": mapping_ms,
+            "db_reads": 1,
+            "items_count": len(response.items),
+            "payload_bytes": estimate_payload_bytes(response.model_dump()),
+        }
+        return (response, metrics) if include_metrics else response
 
     def create_order(self, user_id: str, payload: CreateOrderRequest | None = None) -> OrderItem:
         cart_items = self.repository.cart_list(user_id)
@@ -186,6 +299,10 @@ class ClientOrdersService:
             },
         )
         self.repository.cart_clear(user_id)
+        invalidate_user_orders_cache(user_id)
+        invalidate_user_bootstrap_cart_cache(user_id)
+        invalidate_user_bootstrap_orders_cache(user_id)
+        invalidate_user_bootstrap_locks_cache(user_id)
         return OrderItem(**created)
 
     def checkout(
@@ -378,6 +495,10 @@ class ClientOrdersService:
             )
             checkout_error.status_code = 500
             raise checkout_error from exc
+        invalidate_user_orders_cache(current_user.id)
+        invalidate_user_bootstrap_cart_cache(current_user.id)
+        invalidate_user_bootstrap_orders_cache(current_user.id)
+        invalidate_user_bootstrap_locks_cache(current_user.id)
 
         return CheckoutResponse(
             order=CheckoutOrderResponse(
@@ -576,6 +697,9 @@ class ClientOrdersService:
             provider_requests=provider_requests,
             provider_notifications=provider_notifications,
         )
+        invalidate_user_orders_cache(current_user.id)
+        invalidate_user_bootstrap_orders_cache(current_user.id)
+        invalidate_user_bootstrap_locks_cache(current_user.id)
 
         return OrderRequestCreateResponse(
             order=CheckoutOrderResponse(
@@ -647,6 +771,9 @@ class ClientOrdersService:
                 )
 
         self.repository.order_update_status(user_id, order_id, next_status)
+        invalidate_user_orders_cache(user_id)
+        invalidate_user_bootstrap_orders_cache(user_id)
+        invalidate_user_bootstrap_locks_cache(user_id)
         if next_status == "cancelled":
             related = self.order_request_repository.cancel_related_entities(
                 client_id=user_id,
@@ -673,6 +800,28 @@ class ClientOrdersService:
                         },
                     )
         return OkResponse(ok=True, idempotent=False)
+
+    @staticmethod
+    def _to_order_list_item(payload: dict) -> OrderListItem:
+        raw_items = list(payload.get("items") or [])
+        first_item = raw_items[0] if raw_items else {}
+        service_name = str(first_item.get("service_name") or first_item.get("name") or "") or None
+        total_cents = payload.get("total_cents")
+        if total_cents is None:
+            subtotal_from_items = sum(int(item.get("total_item_cents", 0) or 0) for item in raw_items)
+            total_cents = subtotal_from_items or None
+        total_label = str(payload.get("total_label") or "")
+        if not total_label:
+            total_label = ClientOrdersService._format_mxn(int(total_cents or 0))
+        return OrderListItem(
+            id=str(payload.get("id") or ""),
+            title=str(payload.get("title") or "Orden"),
+            status=str(payload.get("status") or "pending_payment"),
+            total_cents=int(total_cents) if total_cents is not None else None,
+            total_label=total_label,
+            created_at=payload.get("created_at"),
+            service_name=service_name,
+        )
 
     def _enrich_order_payload(self, payload: dict) -> dict:
         items = self._normalize_order_items(list(payload.get("items") or []))

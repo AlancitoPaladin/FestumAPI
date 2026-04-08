@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from google.api_core.exceptions import GoogleAPICallError, PermissionDenied, RetryError
+from google.cloud.firestore_v1.base_query import FieldFilter
 
 from app.core.exceptions import ServiceUnavailableError
 from app.core.firebase import get_firestore_client
@@ -167,7 +168,9 @@ class OrderRequestRepository:
                 provider_ref = self.db.collection("provider_profiles").document(provider_id)
 
                 request_docs = list(
-                    provider_ref.collection("order_requests").where("order_id", "==", order_id).stream()
+                    provider_ref.collection("order_requests").where(
+                        filter=FieldFilter("order_id", "==", order_id)
+                    ).stream()
                 )
                 for request_doc in request_docs:
                     data = request_doc.to_dict() or {}
@@ -181,7 +184,9 @@ class OrderRequestRepository:
                         requests_updated += 1
 
                 booking_docs = list(
-                    provider_ref.collection("bookings").where("order_id", "==", order_id).stream()
+                    provider_ref.collection("bookings").where(
+                        filter=FieldFilter("order_id", "==", order_id)
+                    ).stream()
                 )
                 for booking_doc in booking_docs:
                     data = booking_doc.to_dict() or {}

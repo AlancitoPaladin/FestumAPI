@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.v1.endpoints.auth import router as auth_router
+from app.api.v1.endpoints.client_bootstrap import router as client_bootstrap_router
 from app.api.v1.endpoints.client_cart import router as client_cart_router
 from app.api.v1.endpoints.client_orders import router as client_orders_router
 from app.api.v1.endpoints.client_products import router as client_products_router
@@ -25,6 +26,7 @@ api_router.include_router(client_services_router, prefix="/client", tags=["clien
 api_router.include_router(client_products_router, prefix="/client", tags=["client"])
 api_router.include_router(client_cart_router, prefix="/client", tags=["client"])
 api_router.include_router(client_orders_router, prefix="/client", tags=["client"])
+api_router.include_router(client_bootstrap_router, prefix="/client", tags=["client"])
 api_router.include_router(notifications_router, prefix="/notifications", tags=["notifications"])
 
 api_router.include_router(provider_home_router, prefix="/providers", tags=["providers"])

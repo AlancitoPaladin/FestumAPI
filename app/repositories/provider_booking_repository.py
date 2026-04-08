@@ -1,6 +1,7 @@
 from datetime import date, datetime, timezone
 
 from google.api_core.exceptions import GoogleAPICallError, PermissionDenied, RetryError
+from google.cloud.firestore_v1.base_query import FieldFilter
 
 from app.core.exceptions import ResourceNotFoundError, ServiceUnavailableError
 from app.core.firebase import get_firestore_client
@@ -116,7 +117,9 @@ class ProviderBookingRepository:
     def delete_all_by_product(self, provider_id: str, product_id: str) -> int:
         try:
             documents = list(
-                self._bookings_collection(provider_id).where("product_id", "==", product_id).stream()
+                self._bookings_collection(provider_id).where(
+                    filter=FieldFilter("product_id", "==", product_id)
+                ).stream()
             )
             if not documents:
                 return 0

@@ -83,14 +83,9 @@ def test_checkout_calculates_financial_breakdown_with_selected_products() -> Non
 class _FakeOrdersListRepo:
     def __init__(self, orders: list[dict]) -> None:
         self.orders = orders
-        self.updated_payloads: list[dict] = []
 
     def order_list(self, user_id: str) -> list[dict]:
         return self.orders
-
-    def order_update_fields(self, user_id: str, order_id: str, payload: dict) -> dict | None:
-        self.updated_payloads.append({"order_id": order_id, "payload": payload})
-        return None
 
 
 def test_get_orders_backfills_totals_from_items_when_missing() -> None:
@@ -115,8 +110,6 @@ def test_get_orders_backfills_totals_from_items_when_missing() -> None:
     assert first.subtotal_cents == 150000
     assert first.total_cents == 182700
     assert first.total_label == "$1,827 MXN"
-    assert fake_repo.updated_payloads
-    assert fake_repo.updated_payloads[0]["payload"]["subtotal_cents"] == 150000
 
 
 def test_get_orders_marks_null_when_backfill_is_not_possible() -> None:
@@ -137,5 +130,3 @@ def test_get_orders_marks_null_when_backfill_is_not_possible() -> None:
     first = response.items[0]
     assert first.subtotal_cents is None
     assert first.total_cents is None
-    assert fake_repo.updated_payloads
-    assert fake_repo.updated_payloads[0]["payload"]["subtotal_cents"] is None

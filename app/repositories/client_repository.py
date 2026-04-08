@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from google.api_core.exceptions import GoogleAPICallError, PermissionDenied, RetryError
+from google.cloud.firestore_v1.base_query import FieldFilter
 from app.core.exceptions import ServiceUnavailableError
 from app.core.firebase import get_firestore_client
 
@@ -81,8 +82,24 @@ class ClientRepository:
         try:
             if not statuses:
                 return []
-            docs = self._orders_collection(user_id).where("status", "in", statuses).stream()
+            docs = self._orders_collection(user_id).where(
+                filter=FieldFilter("status", "in", statuses)
+            ).stream()
             return [{"id": doc.id, **doc.to_dict()} for doc in docs]
+        except (PermissionDenied, GoogleAPICallError, RetryError) as exc:
+            self._raise_firestore_unavailable(exc)
+
+    def list_order_status_and_items_by_statuses(self, user_id: str, statuses: list[str]) -> list[dict]:
+        try:
+            if not statuses:
+                return []
+            docs = (
+                self._orders_collection(user_id)
+                .where(filter=FieldFilter("status", "in", statuses))
+                .select(["status", "items"])
+                .stream()
+            )
+            return [{"id": doc.id, **(doc.to_dict() or {})} for doc in docs]
         except (PermissionDenied, GoogleAPICallError, RetryError) as exc:
             self._raise_firestore_unavailable(exc)
 

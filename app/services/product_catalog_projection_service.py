@@ -69,9 +69,7 @@ class ProductCatalogProjectionService:
             signed_asset = self.storage_service.build_signed_asset(key)
             images.append(
                 {
-                    "key": signed_asset.key,
-                    "url": signed_asset.url,
-                    "expires_at": signed_asset.expires_at,
+                    **signed_asset.model_dump(mode="json"),
                     "is_main": key == main_key if main_key else index == 0,
                 }
             )

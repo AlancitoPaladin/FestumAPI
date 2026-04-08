@@ -1,5 +1,9 @@
+from time import perf_counter
+
 from app.core.exceptions import ResourceConflictError, ResourceNotFoundError
 from app.repositories.client_repository import ClientRepository
+from app.services.client_cache import invalidate_user_bootstrap_cart_cache
+from app.services.performance_logging import estimate_payload_bytes
 from app.schemas.client import (
     AddCartItemRequest,
     CartContainsResponse,
@@ -15,14 +19,34 @@ class ClientCartService:
     def __init__(self) -> None:
         self.repository = ClientRepository()
 
-    def list_items(self, user_id: str) -> CartItemsResponse:
+    def list_items(
+        self,
+        user_id: str,
+        *,
+        include_metrics: bool = False,
+    ) -> CartItemsResponse | tuple[CartItemsResponse, dict]:
+        start_ts = perf_counter()
+        db_start = perf_counter()
         raw_items = self.repository.cart_list(user_id)
-        return CartItemsResponse(
+        db_ms = (perf_counter() - db_start) * 1000
+        map_start = perf_counter()
+        response = CartItemsResponse(
             items=[self._to_cart_item(item) for item in raw_items]
         )
+        mapping_ms = (perf_counter() - map_start) * 1000
+        metrics = {
+            "total_ms": (perf_counter() - start_ts) * 1000,
+            "db_ms": db_ms,
+            "mapping_ms": mapping_ms,
+            "db_reads": 1,
+            "items_count": len(response.items),
+            "payload_bytes": estimate_payload_bytes(response.model_dump()),
+        }
+        return (response, metrics) if include_metrics else response
 
     def clear(self, user_id: str) -> OkResponse:
         self.repository.cart_clear(user_id)
+        invalidate_user_bootstrap_cart_cache(user_id)
         return OkResponse(ok=True)
 
     def contains(self, user_id: str, service_id: str) -> CartContainsResponse:
@@ -68,12 +92,14 @@ class ClientCartService:
                 "product_name": product_name,
             },
         )
+        invalidate_user_bootstrap_cart_cache(user_id)
         return self._to_cart_item(created)
 
     def remove(self, user_id: str, item_id: str) -> RemovedCartItemResponse:
         removed = self.repository.cart_delete(user_id, item_id)
         if not removed:
             raise ResourceNotFoundError("Cart item not found", code="NOT_FOUND")
+        invalidate_user_bootstrap_cart_cache(user_id)
         return RemovedCartItemResponse(item=self._to_cart_item(removed))
 
     def restore(self, user_id: str, payload: RestoreCartItemRequest) -> OkResponse:
@@ -90,6 +116,7 @@ class ClientCartService:
                 "restored_index": payload.index,
             },
         )
+        invalidate_user_bootstrap_cart_cache(user_id)
         return OkResponse(ok=True)
 
     @staticmethod

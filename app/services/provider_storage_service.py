@@ -10,12 +10,15 @@ from PIL import Image, UnidentifiedImageError
 
 from app.core.config import get_settings
 from app.core.exceptions import ApiError, ServiceUnavailableError
-from app.schemas.asset import SignedAssetResponse
+from app.schemas.asset import SignedAssetResponse, SignedAssetVariantResponse
 
 
 class ProviderStorageService:
     allowed_content_types = {"image/webp", "image/png", "image/jpeg"}
     max_file_size_bytes = 10 * 1024 * 1024  # 10 MB
+
+    def __init__(self) -> None:
+        self._s3_client_cached = None
 
     def upload_logo(self, provider_id: str, file: UploadFile) -> tuple[str, str]:
         storage_path = f"providers/{provider_id}/logo/logo.webp"
@@ -58,17 +61,23 @@ class ProviderStorageService:
         if len(content) > self.max_file_size_bytes:
             raise ApiError("Image file exceeds the 10 MB limit")
 
-        webp_content = self._convert_to_webp(content)
         normalized_storage_path = storage_path.replace("\\", "/")
-        self._upload_to_s3(normalized_storage_path, webp_content)
+        variants = self._build_webp_variants(content)
+        variant_keys = self._build_variant_keys(normalized_storage_path)
+        self._upload_to_s3(normalized_storage_path, variants["original"])
+        self._upload_to_s3(variant_keys["thumb"], variants["thumb"])
+        self._upload_to_s3(variant_keys["medium"], variants["medium"])
         asset_url = self._build_asset_url(normalized_storage_path)
         return normalized_storage_path, asset_url
 
     def delete_file(self, storage_path: str) -> None:
         if not storage_path:
             return
-        normalized_storage_path = storage_path.replace("\\", "/")
+        normalized_storage_path = storage_path.replace("\\", "/").lstrip("/")
+        variant_keys = self._build_variant_keys(normalized_storage_path)
         self._delete_from_s3(normalized_storage_path)
+        self._delete_from_s3(variant_keys["thumb"])
+        self._delete_from_s3(variant_keys["medium"])
 
     def build_signed_asset(
         self,
@@ -86,21 +95,97 @@ class ProviderStorageService:
 
         expires_in = ttl_seconds or settings.s3_presigned_ttl_seconds
         expires_in = max(60, min(expires_in, 3600))
-        expires_at = datetime.now(tz=timezone.utc) + timedelta(seconds=expires_in)
-        expires_at_iso = expires_at.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
         try:
             s3_client = self._get_s3_client()
-            signed_url = s3_client.generate_presigned_url(
-                "get_object",
-                Params={"Bucket": bucket_name, "Key": normalized_storage_path},
-                ExpiresIn=expires_in,
-                HttpMethod="GET",
+            original_asset = self._build_signed_asset_for_key(
+                s3_client=s3_client,
+                bucket_name=bucket_name,
+                key=normalized_storage_path,
+                expires_in=expires_in,
+            )
+            variant_keys = self._build_variant_keys(normalized_storage_path)
+            thumb_asset = self._build_variant_or_original_asset(
+                s3_client=s3_client,
+                bucket_name=bucket_name,
+                variant_key=variant_keys["thumb"],
+                original_asset=original_asset,
+                expires_in=expires_in,
+            )
+            medium_asset = self._build_variant_or_original_asset(
+                s3_client=s3_client,
+                bucket_name=bucket_name,
+                variant_key=variant_keys["medium"],
+                original_asset=original_asset,
+                expires_in=expires_in,
+            )
+
+            return SignedAssetResponse(
+                key=medium_asset.key,
+                url=medium_asset.url,
+                expires_at=medium_asset.expires_at,
+                thumb=thumb_asset,
+                medium=medium_asset,
+                original=original_asset,
+            )
+        except (BotoCoreError, ClientError) as exc:
+            raise ServiceUnavailableError(
+                "Failed to generate signed URL for S3 image."
+            ) from exc
+
+    def build_signed_asset_lite(
+        self,
+        storage_path: str,
+        *,
+        ttl_seconds: int | None = None,
+        preferred_variant: str = "thumb",
+    ) -> SignedAssetResponse:
+        normalized_storage_path = self.extract_storage_key(storage_path)
+        if not normalized_storage_path:
+            raise ApiError("Image key is required to generate a signed URL")
+
+        settings = get_settings()
+        bucket_name = settings.s3_bucket_name
+        if not bucket_name:
+            raise ServiceUnavailableError("S3 bucket is not configured. Verify S3_BUCKET_NAME.")
+
+        expires_in = ttl_seconds or settings.s3_presigned_ttl_seconds
+        expires_in = max(60, min(expires_in, 3600))
+        preferred = preferred_variant if preferred_variant in {"thumb", "medium"} else "thumb"
+
+        try:
+            s3_client = self._get_s3_client()
+            variant_keys = self._build_variant_keys(normalized_storage_path)
+            selected_key = variant_keys["thumb"] if preferred == "thumb" else variant_keys["medium"]
+
+            selected_asset = self._build_signed_asset_for_key(
+                s3_client=s3_client,
+                bucket_name=bucket_name,
+                key=selected_key,
+                expires_in=expires_in,
+            )
+            thumb_asset = (
+                selected_asset
+                if selected_key == variant_keys["thumb"]
+                else None
+            )
+            medium_asset = (
+                selected_asset
+                if selected_key == variant_keys["medium"]
+                else None
+            )
+            original_asset = (
+                selected_asset
+                if selected_key == normalized_storage_path
+                else None
             )
             return SignedAssetResponse(
-                key=normalized_storage_path,
-                url=signed_url,
-                expires_at=expires_at_iso,
+                key=selected_asset.key,
+                url=selected_asset.url,
+                expires_at=selected_asset.expires_at,
+                thumb=thumb_asset,
+                medium=medium_asset,
+                original=original_asset,
             )
         except (BotoCoreError, ClientError) as exc:
             raise ServiceUnavailableError(
@@ -135,18 +220,102 @@ class ProviderStorageService:
         if file.content_type not in self.allowed_content_types:
             raise ApiError("Only JPG, PNG or WEBP images are allowed")
 
-    def _convert_to_webp(self, content: bytes) -> bytes:
+    def _build_webp_variants(self, content: bytes) -> dict[str, bytes]:
         try:
             with Image.open(BytesIO(content)) as image:
                 converted_image = image.copy()
                 if converted_image.mode not in {"RGB", "RGBA"}:
                     converted_image = converted_image.convert("RGBA")
-
-                output = BytesIO()
-                converted_image.save(output, format="WEBP", quality=80, method=6)
-                return output.getvalue()
+                original = self._encode_webp(converted_image, quality=80)
+                thumb = self._encode_webp(self._resize_for_width(converted_image, 480), quality=72)
+                medium = self._encode_webp(self._resize_for_width(converted_image, 1080), quality=78)
+                return {
+                    "original": original,
+                    "thumb": thumb,
+                    "medium": medium,
+                }
         except (UnidentifiedImageError, OSError, ValueError) as exc:
             raise ApiError("Invalid image file") from exc
+
+    @staticmethod
+    def _encode_webp(image: Image.Image, *, quality: int) -> bytes:
+        output = BytesIO()
+        image.save(output, format="WEBP", quality=quality, method=6)
+        return output.getvalue()
+
+    @staticmethod
+    def _resize_for_width(image: Image.Image, max_width: int) -> Image.Image:
+        width, height = image.size
+        if width <= max_width:
+            return image.copy()
+        resized_height = max(1, int(round((height * max_width) / width)))
+        return image.resize((max_width, resized_height), Image.Resampling.LANCZOS)
+
+    @staticmethod
+    def _build_variant_keys(storage_key: str) -> dict[str, str]:
+        normalized_key = storage_key.lstrip("/")
+        if "." in normalized_key:
+            stem, _ext = normalized_key.rsplit(".", 1)
+        else:
+            stem = normalized_key
+        filename = stem.rsplit("/", 1)[-1]
+        folder = stem.rsplit("/", 1)[0] if "/" in stem else ""
+        variants_folder = f"{folder}/variants" if folder else "variants"
+        return {
+            "thumb": f"{variants_folder}/{filename}_thumb.webp",
+            "medium": f"{variants_folder}/{filename}_medium.webp",
+        }
+
+    def _build_signed_asset_for_key(
+        self,
+        *,
+        s3_client,
+        bucket_name: str,
+        key: str,
+        expires_in: int,
+    ) -> SignedAssetVariantResponse:
+        expires_at = datetime.now(tz=timezone.utc) + timedelta(seconds=expires_in)
+        expires_at_iso = expires_at.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        signed_url = s3_client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": bucket_name, "Key": key},
+            ExpiresIn=expires_in,
+            HttpMethod="GET",
+        )
+        return SignedAssetVariantResponse(
+            key=key,
+            url=signed_url,
+            expires_at=expires_at_iso,
+        )
+
+    def _build_variant_or_original_asset(
+        self,
+        *,
+        s3_client,
+        bucket_name: str,
+        variant_key: str,
+        original_asset: SignedAssetVariantResponse,
+        expires_in: int,
+    ) -> SignedAssetVariantResponse:
+        if self._object_exists(s3_client=s3_client, bucket_name=bucket_name, key=variant_key):
+            return self._build_signed_asset_for_key(
+                s3_client=s3_client,
+                bucket_name=bucket_name,
+                key=variant_key,
+                expires_in=expires_in,
+            )
+        return original_asset
+
+    @staticmethod
+    def _object_exists(*, s3_client, bucket_name: str, key: str) -> bool:
+        try:
+            s3_client.head_object(Bucket=bucket_name, Key=key)
+            return True
+        except ClientError as exc:
+            status_code = str((exc.response or {}).get("ResponseMetadata", {}).get("HTTPStatusCode", ""))
+            if status_code in {"403", "404"}:
+                return False
+            raise
 
     def _build_asset_url(self, storage_path: str) -> str:
         settings = get_settings()
@@ -169,8 +338,9 @@ class ProviderStorageService:
 
         return f"https://{bucket_name}.s3.{region}.amazonaws.com/{storage_path}"
 
-    @staticmethod
-    def _get_s3_client():
+    def _get_s3_client(self):
+        if self._s3_client_cached is not None:
+            return self._s3_client_cached
         settings = get_settings()
         if not settings.s3_bucket_name or not settings.aws_region:
             raise ServiceUnavailableError(
@@ -181,7 +351,8 @@ class ProviderStorageService:
         if settings.aws_access_key_id and settings.aws_secret_access_key:
             client_kwargs["aws_access_key_id"] = settings.aws_access_key_id
             client_kwargs["aws_secret_access_key"] = settings.aws_secret_access_key
-        return boto3.client("s3", **client_kwargs)
+        self._s3_client_cached = boto3.client("s3", **client_kwargs)
+        return self._s3_client_cached
 
     def _upload_to_s3(self, storage_path: str, content: bytes) -> None:
         settings = get_settings()
@@ -196,6 +367,7 @@ class ProviderStorageService:
                 Key=storage_path,
                 Body=content,
                 ContentType="image/webp",
+                CacheControl="public,max-age=31536000,immutable",
             )
         except (BotoCoreError, ClientError) as exc:
             raise ServiceUnavailableError(

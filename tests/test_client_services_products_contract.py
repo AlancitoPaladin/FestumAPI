@@ -33,7 +33,14 @@ class _FakeProductRepository:
 
 
 class _FakeServiceProjection:
-    def build_service_projection(self, item: dict) -> dict:
+    def build_service_projection(
+        self,
+        item: dict,
+        on_image_error=None,
+        *,
+        image_mode: str = "full",
+        include_all_images: bool = True,
+    ) -> dict:
         return {
             "id": item["id"],
             "provider_id": item["provider_id"],
@@ -44,8 +51,16 @@ class _FakeServiceProjection:
             "price_label": item["price_label"],
             "badge": item["badge"],
             "category": item["category"],
-            "image": None,
-            "image_url": "",
+            "image": {"key": "main.webp", "url": "https://cdn.example.com/main.webp", "expires_at": "2026-12-31T00:00:00Z"},
+            "image_url": "https://cdn.example.com/main.webp",
+            "images": [
+                {"key": "main.webp", "url": "https://cdn.example.com/main.webp", "expires_at": "2026-12-31T00:00:00Z"},
+                {"key": "second.webp", "url": "https://cdn.example.com/second.webp", "expires_at": "2026-12-31T00:00:00Z"},
+            ],
+            "image_urls": [
+                "https://cdn.example.com/main.webp",
+                "https://cdn.example.com/second.webp",
+            ],
         }
 
 
@@ -90,7 +105,8 @@ def _assert_products_contract(items: list) -> None:
 def test_home_includes_products_contract() -> None:
     service = _build_service_under_test()
     response = service.home()
-    _assert_products_contract(response.root["salones-sociales"])
+    dumped = response.model_dump(by_alias=True)
+    _assert_products_contract(dumped["salones-sociales"])
 
 
 def test_by_category_includes_products_contract() -> None:
@@ -114,3 +130,10 @@ def test_detail_includes_products_contract() -> None:
     assert response.products[0].id == "prod-1"
     assert response.products[0].name == "Paquete basico"
     assert response.products[0].unit_price_cents == 200000
+    assert len(response.images) == 2
+    assert response.images[0]["key"] == "main.webp"
+    assert response.images[1]["key"] == "second.webp"
+    assert response.image_urls == [
+        "https://cdn.example.com/main.webp",
+        "https://cdn.example.com/second.webp",
+    ]

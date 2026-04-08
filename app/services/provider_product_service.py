@@ -26,6 +26,7 @@ from app.schemas.provider_reservation import (
     ProviderReservationProductSummaryResponse,
 )
 from app.repositories.provider_booking_repository import ProviderBookingRepository
+from app.services.client_cache import invalidate_all_bootstrap_home_cache, invalidate_all_home_cache
 from app.services.product_catalog_projection_service import ProductCatalogProjectionService
 from app.services.provider_storage_service import ProviderStorageService
 
@@ -59,6 +60,7 @@ class ProviderProductService:
                 }
             ),
         )
+        self._invalidate_client_home_cache()
         return self._build_product_response(product)
 
     def list_products(self, provider_id: str, service_id: str) -> ProviderProductListResponse:
@@ -115,6 +117,7 @@ class ProviderProductService:
                 "category": parent_service["category"],
             },
         )
+        self._invalidate_client_home_cache()
         return self._build_product_response(product)
 
     def update_product_by_id(
@@ -159,6 +162,7 @@ class ProviderProductService:
                 "category": parent_service["category"],
             },
         )
+        self._invalidate_client_home_cache()
         return ProviderProductStatusUpdateResponse(ok=True)
 
     def upload_product_image(
@@ -192,6 +196,7 @@ class ProviderProductService:
         except Exception:
             self.storage_service.delete_file(image_key)
             raise
+        self._invalidate_client_home_cache()
         signed_asset = self.storage_service.build_signed_asset(image_key)
         return ProviderProductImageUploadResponse(
             product_id=product_id,
@@ -233,6 +238,7 @@ class ProviderProductService:
             product_id=product_id,
             image_key=payload.image_key,
         )
+        self._invalidate_client_home_cache()
         return self._build_product_response(product)
 
     def set_main_product_image_by_id(
@@ -265,6 +271,7 @@ class ProviderProductService:
             product_id=product_id,
             image_keys=payload.image_keys,
         )
+        self._invalidate_client_home_cache()
         return self._build_product_response(product)
 
     def delete_product_image(
@@ -282,6 +289,7 @@ class ProviderProductService:
             image_key=payload.image_key,
         )
         self.storage_service.delete_file(deleted_storage_path)
+        self._invalidate_client_home_cache()
         return self._build_product_response(product)
 
     def delete_product_image_by_id(
@@ -309,6 +317,7 @@ class ProviderProductService:
         deleted, storage_paths = self.repository.delete(provider_id, service_id, product_id)
         for storage_path in storage_paths:
             self.storage_service.delete_file(storage_path)
+        self._invalidate_client_home_cache()
         return ProviderProductDeleteResponse(deleted=deleted)
 
     def list_products_for_reservations(
@@ -349,7 +358,13 @@ class ProviderProductService:
         deleted, storage_paths = self.repository.delete(provider_id, product["service_id"], product_id)
         for storage_path in storage_paths:
             self.storage_service.delete_file(storage_path)
+        self._invalidate_client_home_cache()
         return ProviderProductDeleteResponse(deleted=deleted)
+
+    @staticmethod
+    def _invalidate_client_home_cache() -> None:
+        invalidate_all_home_cache()
+        invalidate_all_bootstrap_home_cache()
 
     def _build_product_response(self, product: dict) -> ProviderProductResponse:
         projected = self.projection_service.build_product_projection(product)

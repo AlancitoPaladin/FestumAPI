@@ -18,6 +18,7 @@ from app.schemas.provider_service import (
     ProviderServiceStatusUpdateResponse,
     ProviderServiceUpdate,
 )
+from app.services.client_cache import invalidate_all_bootstrap_home_cache, invalidate_all_home_cache
 from app.services.service_catalog_projection_service import ServiceCatalogProjectionService
 from app.services.provider_storage_service import ProviderStorageService
 
@@ -49,6 +50,8 @@ class ProviderServiceCatalogService:
                 "status": "draft",
             },
         )
+        invalidate_all_home_cache()
+        invalidate_all_bootstrap_home_cache()
         return self._to_response(service)
 
     def create_draft_service(
@@ -69,6 +72,8 @@ class ProviderServiceCatalogService:
                 "image_keys": [],
             },
         )
+        invalidate_all_home_cache()
+        invalidate_all_bootstrap_home_cache()
         return self._to_response(service)
 
     def list_services(self, provider_id: str) -> ProviderServiceListResponse:
@@ -99,6 +104,8 @@ class ProviderServiceCatalogService:
             service_id=service_id,
             data=normalized,
         )
+        invalidate_all_home_cache()
+        invalidate_all_bootstrap_home_cache()
         return self._to_response(service)
 
     def update_service_status(
@@ -120,6 +127,8 @@ class ProviderServiceCatalogService:
             service_id=service_id,
             data={"status": payload.status},
         )
+        invalidate_all_home_cache()
+        invalidate_all_bootstrap_home_cache()
         return ProviderServiceStatusUpdateResponse(ok=True)
 
     def upload_service_image(
@@ -147,6 +156,8 @@ class ProviderServiceCatalogService:
         except Exception:
             self.storage_service.delete_file(storage_path)
             raise
+        invalidate_all_home_cache()
+        invalidate_all_bootstrap_home_cache()
 
         image = self.storage_service.build_signed_asset(storage_path)
         return ProviderServiceImageUploadResponse(
@@ -164,6 +175,8 @@ class ProviderServiceCatalogService:
         payload: ProviderServiceImageReferenceRequest,
     ) -> ProviderServiceResponse:
         service = self.repository.set_main_image(provider_id, service_id, payload.image_key)
+        invalidate_all_home_cache()
+        invalidate_all_bootstrap_home_cache()
         return self._to_response(service)
 
     def reorder_service_images(
@@ -173,6 +186,8 @@ class ProviderServiceCatalogService:
         payload: ProviderServiceImageReorderRequest,
     ) -> ProviderServiceResponse:
         service = self.repository.reorder_images(provider_id, service_id, payload.image_keys)
+        invalidate_all_home_cache()
+        invalidate_all_bootstrap_home_cache()
         return self._to_response(service)
 
     def delete_service_image(
@@ -187,6 +202,8 @@ class ProviderServiceCatalogService:
             image_key=payload.image_key,
         )
         self.storage_service.delete_file(deleted_storage_path)
+        invalidate_all_home_cache()
+        invalidate_all_bootstrap_home_cache()
         return self._to_response(service)
 
     def delete_service(self, provider_id: str, service_id: str) -> ProviderServiceDeleteResponse:
@@ -207,6 +224,8 @@ class ProviderServiceCatalogService:
 
         for storage_path in [*product_storage_paths, *service_storage_paths]:
             self.storage_service.delete_file(storage_path)
+        invalidate_all_home_cache()
+        invalidate_all_bootstrap_home_cache()
 
         return ProviderServiceDeleteResponse(deleted=deleted)
 
